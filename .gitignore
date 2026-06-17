@@ -10,6 +10,7 @@ __pycache__
 build/*
 **/_build/**
 **/build/**
+/outputs/
 *.exe
 *.csv
 secret_github_token

@@ -164,7 +164,17 @@ def pytest_configure(config):
 
 
 def pytest_collection_modifyitems(config, items):
-    device = aie_utils.DefaultNPURuntime.device().resolve().name
+    # Resolve the active NPU device for device-gating. On a host without an NPU
+    # runtime, aie_utils.DefaultNPURuntime is None; in that case there is no
+    # device to gate against, so skip the supported_devices filtering entirely.
+    # Hermetic, NPU-free tests (no supported_devices marker) are unaffected.
+    runtime = aie_utils.DefaultNPURuntime
+    if runtime is None:
+        return
+    npu_device = runtime.device()
+    if npu_device is None:
+        return
+    device = npu_device.resolve().name
     for item in items:
         marker = item.get_closest_marker("supported_devices")
         if marker and device not in marker.args:

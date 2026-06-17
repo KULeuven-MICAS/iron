@@ -2,7 +2,29 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import numpy as np
-from aie.utils.hostruntime.xrtruntime.tensor import XRTTensor, xrt as _pyxrt
+
+try:
+    # XRT (pyxrt) is only present on a host with the NPU runtime installed.
+    # Import lazily so that pure-MLIR / introspection code paths (and their
+    # tests) can import iron.* without an NPU. XRTSubBuffer below only needs
+    # these symbols when actually instantiated, which requires the NPU anyway.
+    from aie.utils.hostruntime.xrtruntime.tensor import XRTTensor, xrt as _pyxrt
+except ImportError:  # pragma: no cover - exercised only when XRT is absent
+
+    class XRTTensor:  # type: ignore[no-redef]
+        """Placeholder used when XRT/pyxrt is unavailable.
+
+        Instantiating it (i.e. attempting NPU work without XRT) fails loudly;
+        merely importing the module does not.
+        """
+
+        def __init__(self, *args, **kwargs):
+            raise ImportError(
+                "XRTTensor requires pyxrt/XRT, which is not installed. "
+                "NPU runtime operations are unavailable in this environment."
+            )
+
+    _pyxrt = None
 
 
 def get_shim_dma_limit(dev) -> int:
