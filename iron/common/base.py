@@ -25,7 +25,6 @@ from .compilation import (
     KernelObjectArtifact,
     KernelArchiveArtifact,
     SourceArtifact,
-    PythonGeneratedMLIRArtifact,
 )
 
 
@@ -115,6 +114,15 @@ class MLIROperator(AIEOperatorBase):
     @property
     def operator_dir(self) -> Path:
         return Path(inspect.getfile(type(self))).parent
+
+    def design_key(self) -> str | None:
+        """Identifies the design this operator compiles to, for sharing it.
+
+        Two operators returning the same key must produce byte-identical MLIR before
+        the fused build prefixes their kernel symbols, and must take the same runtime
+        argument shapes. ``None`` means the design is never shared.
+        """
+        return None
 
     @property
     def name(self) -> str:
