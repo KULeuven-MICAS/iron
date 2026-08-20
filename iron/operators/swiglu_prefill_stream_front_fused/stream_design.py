@@ -26,7 +26,10 @@ from pathlib import Path
 
 import stream
 import torch
+from xdsl.ir.affine import AffineMap
 from stream.api import optimize_allocation_co
+from stream.parser.onnx.operator_parser import OnnxOperatorParser
+from stream.workload.workload import ComputationNode, Tensor
 
 from iron.common.stream.hardware import ComputeArray
 from iron.common.stream.mapping import (
@@ -49,28 +52,19 @@ ACCELERATOR = os.path.join(
     "whole_array_strix.yaml",
 )
 
-BACKEND = "ortools_gscip"  # license-free OR-Tools GSCIP, no Gurobi needed
+BACKEND = "gurobi"
 OUTPUT_ROOT = "outputs"
 
 # Names for the exported graph's computation nodes, in topological order, and for
 # the tensors they produce. They name the roles rather than the ATen ops the
 # exporter captured, and they are what the mapping and the generated design are
 # read by.
-GATE, UP, SILU, MUL, DOWN = "Gemm_Left", "Gemm_Right", "Silu", "Elt_Mul", "Gemm_Down"
-NODE_NAMES = [GATE, UP, SILU, MUL, DOWN]
+NAME_FRONT = "front"
+NAME_DOWN = "down"
+NODE_NAMES = [NAME_FRONT, NAME_DOWN]
 RESULT_NAMES = {
-    GATE: reference.GATE_PROJECTION,
-    UP: reference.UP_PROJECTION,
-    SILU: reference.ACTIVATION,
-    MUL: reference.HIDDEN,
+    NAME_FRONT: reference.NAME_FRONT,
 }
-
-# The kernel tile each layer is compiled and mapped for, as (sequence, embedding,
-# hidden). A core holds the operands of every layer in its group, so the tile a group
-# can afford shrinks as more layers fuse onto it. Carrying the tile and no absolute
-# dimension is what lets one mapping hold across problem sizes.
-FUSED_TILES = (32, 32, 64)  # k=1, k=2: several layers share a core
-LAYER_TILES = (64, 64, 64)  # k=5: one layer per core
 
 # Sequence positions an elementwise layer works at a time when it reads from and
 # writes to memory. Its tile is then this many whole rows, which is contiguous in
@@ -78,21 +72,48 @@ LAYER_TILES = (64, 64, 64)  # k=5: one layer per core
 # MAC tile at a time.
 ELEMENTWISE_ROWS = 1
 
-GROUP_LAYERS = [[GATE, UP, SILU, MUL, DOWN]]
+GROUP_LAYERS = [[NAME_FRONT, NAME_DOWN]]
+
+
+class SwigluFrontFusedParser(OnnxOperatorParser):
+    def generate_node(self, name_to_tensor_dict: dict[str, Tensor]) -> ComputationNode:
+        inputs = tuple(name_to_tensor_dict[name] for name in self.node.input)
+
+        # check input and shape validness
+        assert len(inputs) == 2
+        input_data, input_weight = inputs
+        assert len(input_data.shape) == 2 and len(input_weight.shape) == 3
+        dm, dk = input_data.shape
+        wk, two, wn = input_weight.shape
+        assert dk == wk
+        assert two == 2
+
+        mappings = (
+            AffineMap.from_callable(lambda m, k, t, n: (m, k)),
+            AffineMap.from_callable(lambda m, k, t, n: (k, t, n)),
+            AffineMap.from_callable(lambda m, k, t, n: (m, n)),
+        )
+        return ComputationNode(
+            type=self.node.op_type,
+            name=self.node.name,
+            inputs=inputs,
+            outputs=self.get_output_tensors(),
+            operand_mapping=mappings,
+        )
 
 
 def tiles_for():
     """The kernel tile, as (sequence, embedding, hidden), for ``k`` fused groups."""
-    return FUSED_TILES
+    # TODO tune this
+    return (32, 32, 64)
 
 
 def gemm_tiles():
     """Each GEMM layer's kernel tile, in the (m, k, n) order the kernel takes."""
     sequence, embedding, hidden = tiles_for()
     return {
-        GATE: (sequence, embedding, hidden),
-        UP: (sequence, embedding, hidden),
-        DOWN: (sequence, hidden, embedding),
+        NAME_FRONT: (sequence, embedding, hidden),
+        NAME_DOWN: (sequence, hidden, embedding),
     }
 
 
@@ -122,43 +143,17 @@ def _placements():
     tiles = gemm_tiles()
 
     def gemm(tiles):
+        # TODO probably not correct?
         return dict(
             zip("mkn", tiles), utilization=61.8, layout="default", bfp16_mmul=True
         )
 
-    def elementwise(rows, columns, layout, bfp16_mmul=False):
-        return {
-            "utilization": 50.0,
-            "layout": layout,
-            "m": rows,
-            "n": columns,
-            "bfp16_mmul": bfp16_mmul,
-        }
-
-    columns = dict(zip(NODE_NAMES, grid.allocate([2, 2, 1, 1, 2])))
-    gemm_split = (("D0", grid.num_rows), ("D2", 2))
-    elementwise_split = (("D0", grid.num_rows),)
-    # Fused behind a GEMM, so the operands take the layout that GEMM writes.
-    fused = elementwise(sequence_tile, hidden_tile, "default", bfp16_mmul=True)
+    # TODO rework/tune this
+    columns = dict(zip(NODE_NAMES, grid.allocate([2, 2])))
     return {
-        GATE: Placement(columns[GATE], gemm_split, gemm(tiles[GATE])),
-        UP: Placement(columns[UP], gemm_split, gemm(tiles[UP])),
-        SILU: Placement(columns[SILU], elementwise_split, fused),
-        MUL: Placement(columns[MUL], elementwise_split, fused),
-        DOWN: Placement(columns[DOWN], gemm_split, gemm(tiles[DOWN])),
+        NAME_FRONT: Placement(columns[NAME_FRONT], (("D0", grid.num_rows), ("D3", 2)), gemm(tiles[NAME_FRONT])),
+        NAME_DOWN: Placement(columns[NAME_DOWN], (("D0", grid.num_rows), ("D2", 2)), gemm(tiles[NAME_DOWN])),
     }
-
-
-def _layer_tiling(layer, hidden_dim, k):
-    """Intra-core tiling of one layer, over the dimensions it iterates."""
-    if layer not in (GATE, UP, DOWN):
-        return [(layer, "D1", hidden_dim), (layer, "D0", ELEMENTWISE_ROWS)]
-    sequence, contraction, output = gemm_tiles()[layer]
-    return [
-        (layer, "D1", contraction),
-        (layer, "D2", output),
-        (layer, "D0", sequence),
-    ]
 
 
 def _groups():
@@ -169,12 +164,13 @@ def _groups():
     the output dimension.
     """
     sequence_tile, embedding_tile, hidden_tile = tiles_for()
+    # TODO what does this mean exactly?
     tiling = [
         [
-            (GATE, "D1", embedding_tile),
-            (DOWN, "D2", embedding_tile),
-            (GATE, "D2", hidden_tile),
-            (GATE, "D0", sequence_tile),
+            (NAME_FRONT, "D0", sequence_tile),
+            (NAME_FRONT, "D1", embedding_tile),
+            (NAME_FRONT, "D3", hidden_tile),
+            (NAME_DOWN, "D2", embedding_tile),
         ]
     ]
     return [
@@ -248,7 +244,7 @@ def _experiment_id(seq_len, embedding_dim, hidden_dim):
     grid = array()
     hardware = os.path.splitext(os.path.basename(ACCELERATOR))[0]
     return (
-        f"{hardware}-swiglu_{seq_len}_{embedding_dim}_{hidden_dim}"
+        f"{hardware}-swiglu_fused_front_{seq_len}_{embedding_dim}_{hidden_dim}"
         f"-{grid.num_rows}_row_{grid.num_columns}_col"
     )
 
@@ -267,6 +263,10 @@ def _design_paths(seq_len, embedding_dim, hidden_dim):
 
 def _run_codegen(seq_len, embedding_dim, hidden_dim, npu):
     """Run stream-dse's constraint optimization and code generation once."""
+    from stream.parser.onnx.model import register_onnx_parser
+
+    register_onnx_parser("SwigluFrontFused", SwigluFrontFusedParser)
+
     grid = array()
     experiment_id = _experiment_id(seq_len, embedding_dim, hidden_dim)
     workload_path, mapping_path = build_inputs(
@@ -345,7 +345,7 @@ def group_digest(group_index, **dims) -> str:
 
 
 def load_group(
-    group_index, func_prefix="", *, seq_len, embedding_dim, hidden_dim, npu
+        group_index, func_prefix="", *, seq_len, embedding_dim, hidden_dim, npu
 ):
     """Generate the ``k``-group design once and return one group's aie module.
 
