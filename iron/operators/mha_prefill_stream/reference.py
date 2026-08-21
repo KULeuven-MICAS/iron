@@ -55,17 +55,14 @@ def query_scale(d_head: int) -> float:
     return 1.0 / math.sqrt(d_head)
 
 
-def generate_golden_reference(seq_len, d_head, seed=42, dtype=torch.bfloat16):
-    """Golden operands and output, with the query already scaled."""
+def generate_golden_reference(seq_len, d_head, heads=1, seed=42, dtype=torch.bfloat16):
+    """Golden operands and output per head, with the query already scaled."""
     generator = torch.Generator().manual_seed(seed)
-    q = torch.randn(seq_len, d_head, generator=generator).to(dtype)
-    k = torch.randn(seq_len, d_head, generator=generator).to(dtype)
-    v = torch.randn(seq_len, d_head, generator=generator).to(dtype)
-    q = (q * query_scale(d_head)).to(dtype)
-    k_t = k.transpose(0, 1).contiguous()
-    return {
-        QUERY: q,
-        KEY_TRANSPOSED: k_t,
-        VALUE: v,
-        CONTEXT: attention_core_module()(q, k_t, v),
-    }
+    shape = (heads, seq_len, d_head)
+    q = torch.randn(shape, generator=generator).to(dtype) * query_scale(d_head)
+    k = torch.randn(shape, generator=generator).to(dtype)
+    v = torch.randn(shape, generator=generator).to(dtype)
+    q, k_t = q.to(dtype), k.transpose(1, 2).contiguous()
+    core = attention_core_module()
+    context = torch.stack([core(q[h], k_t[h], v[h]) for h in range(heads)])
+    return {QUERY: q, KEY_TRANSPOSED: k_t, VALUE: v, CONTEXT: context}
