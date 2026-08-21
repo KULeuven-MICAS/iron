@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import aie.utils as aie_utils
+import torch
 
 from iron.common import (
     AIERuntimeArgSpec,
@@ -83,6 +84,18 @@ class _MHAStreamGroup(MLIROperator):
             )
         ]
 
+    def reference(self, *inputs):
+        """CPU result for this group, for the reference and compare dispatches.
+
+        One layer per group, which is what :data:`GROUP_LAYERS` gives for
+        ``k = LAYER_BY_LAYER``.
+        """
+        design = self._design
+        (layer,) = design.GROUP_LAYERS[self.k][self.group_index]
+        if layer == design.SOFTMAX_NODE:
+            return torch.softmax(inputs[0].float(), dim=-1).to(inputs[0].dtype)
+        return inputs[0] @ inputs[1]
+
     def design_key(self):
         """Groups whose generated design is byte-identical share it."""
         return self._design.group_digest(self.group_index, **self._dims())
@@ -114,7 +127,14 @@ class MHAPrefillStream(OperatorSequence):
     """
 
     def __init__(
-        self, seq_len, d_head, heads=1, k=None, context=None, share_designs=True
+        self,
+        seq_len,
+        d_head,
+        heads=1,
+        k=None,
+        context=None,
+        share_designs=True,
+        dispatch="auto",
     ):
         from iron.operators.mha_prefill_stream.stream_design import (
             LAYER_BY_LAYER,
@@ -153,5 +173,6 @@ class MHAPrefillStream(OperatorSequence):
             buffer_sizes={name: heads * head_bytes for name in per_head},
             trace_size=trace_size(),
             share_designs=share_designs,
+            dispatch=dispatch,
             context=context,
         )

@@ -54,18 +54,22 @@ ACCELERATOR = os.path.join(
     "whole_array_strix.yaml",
 )
 BACKEND = "ortools_gscip"  # license-free OR-Tools GSCIP, no Gurobi needed
-COLUMNS_IN_USE = 4
 OUTPUT_ROOT = "outputs"
 
-# Query positions a core holds at a time. The score block it produces is this many
-# whole rows, so a row reaches the softmax contiguous. A core takes its whole query
-# slice at once: a second temporal loop beside the key one would put two variables in
-# a reuse window, which the object-fifo lowering does not express.
-QUERY_TILE = 64
+# Columns the design occupies, one per layer. Only the query dimension is splittable
+# and a single dimension cannot be split over rows and columns at once, so a layer
+# takes one column; the layers take different ones so they never share a shim tile.
+COLUMNS_IN_USE = 3
 
 # Key positions the score GEMM produces at a time. The softmax reduces the key
-# dimension and so reads whole rows, but the GEMM ahead of it does not have to.
-KEY_TILE = 64
+# dimension and reads whole rows; a GEMM in a group of its own may block it, but one
+# fused with the softmax may not.
+_KEY_BLOCK = 64
+
+
+def key_tile(seq_len, k):
+    return seq_len if k == 1 else _KEY_BLOCK
+
 
 LAYER_BY_LAYER = 3
 GROUP_LAYERS = {
@@ -76,6 +80,7 @@ GROUP_LAYERS = {
 # A memory tile holds the head's whole key and value, since neither the key nor the
 # head dimension can be tiled away. Measured against the 256 KB Strix memory tile.
 MEMTILE_BYTES = 256 * 1024
+BYTES_PER_ELEMENT = 2
 
 
 @lru_cache(maxsize=None)
@@ -86,42 +91,54 @@ def array() -> ComputeArray:
     return ComputeArray.from_device(aie_utils.get_current_device())
 
 
+def _cores(grid):
+    """A column per layer, and how many cores one layer has."""
+    return grid.allocate([1] * COLUMNS_IN_USE), grid.num_rows
+
+
+def query_tile(seq_len, grid):
+    """Query positions one core holds. A core takes its whole slice at once: a second
+    temporal loop beside the key one would put two variables in a reuse window, which
+    the object-fifo lowering does not express."""
+    return seq_len // _cores(grid)[1]
+
+
 def _placements(seq_len, d_head, k):
-    """Where each layer runs. One column, the query dimension split over its rows."""
+    """Where each layer runs. Every layer takes the same columns, splitting the query
+    dimension over their cores, the only dimension a core may split."""
     grid = array()
-    columns = grid.allocate([1, 1, 1]) if k == 1 else [[0]] * len(GROUP_LAYERS[k])
-    split = (("D0", grid.num_rows),)
+    columns, cores = _cores(grid)
+    tile = query_tile(seq_len, grid)
+    scores_col, softmax_col, context_col = columns
+    split = (("D0", cores),)
     gemm = lambda m, contraction, n: dict(  # noqa: E731
         m=m, k=contraction, n=n, utilization=61.8, layout="default", bfp16_mmul=True
     )
     return {
-        SCORES_NODE: Placement(columns[0], split, gemm(QUERY_TILE, d_head, KEY_TILE)),
+        SCORES_NODE: Placement(
+            scores_col, split, gemm(tile, d_head, key_tile(seq_len, k))
+        ),
         SOFTMAX_NODE: Placement(
-            columns[1],
+            softmax_col,
             split,
             # One call reduces its whole buffer, so the tile is exactly one row.
             dict(m=1, n=seq_len, utilization=50.0, layout="contiguous"),
         ),
-        CONTEXT_NODE: Placement(columns[2], split, gemm(QUERY_TILE, KEY_TILE, d_head)),
+        CONTEXT_NODE: Placement(
+            context_col, split, gemm(tile, key_tile(seq_len, k), d_head)
+        ),
     }
 
 
-def _layer_tiling(layer, seq_len, d_head, rows):
+def _layer_tiling(layer, seq_len, d_head, grid, k):
     """Each of the layer's dimensions, as (dim, tile, the extent one core holds)."""
-    query = seq_len // rows
+    query = query_tile(seq_len, grid)
+    KEY_TILE = key_tile(seq_len, k)
     if layer == SCORES_NODE:
-        return [
-            ("D0", QUERY_TILE, query),
-            ("D1", d_head, d_head),
-            ("D2", KEY_TILE, seq_len),
-        ]
+        return [("D0", query, query), ("D1", d_head, d_head), ("D2", KEY_TILE, seq_len)]
     if layer == SOFTMAX_NODE:
         return [("D0", 1, query), ("D1", seq_len, seq_len)]
-    return [
-        ("D0", QUERY_TILE, query),
-        ("D1", KEY_TILE, seq_len),
-        ("D2", d_head, d_head),
-    ]
+    return [("D0", query, query), ("D1", KEY_TILE, seq_len), ("D2", d_head, d_head)]
 
 
 def _groups(seq_len, d_head, k):
@@ -130,7 +147,7 @@ def _groups(seq_len, d_head, k):
     A dimension a core already holds whole is left out: the loop would run once and
     still cost a reuse variable, and a tensor gets one.
     """
-    rows = array().num_rows
+    grid = array()
     return [
         FusedGroup(
             f"Fused_Group_{index + 1}",
@@ -138,7 +155,7 @@ def _groups(seq_len, d_head, k):
             [
                 (layer, dim, tile)
                 for layer in layers
-                for dim, tile, extent in _layer_tiling(layer, seq_len, d_head, rows)
+                for dim, tile, extent in _layer_tiling(layer, seq_len, d_head, grid, k)
                 if tile < extent
             ],
         )
@@ -148,18 +165,23 @@ def _groups(seq_len, d_head, k):
 
 def _check_shapes(seq_len, d_head):
     grid = array()
-    if seq_len % (QUERY_TILE * grid.num_rows):
+    _, cores = _cores(grid)
+    if seq_len % cores:
+        raise ValueError(f"seq_len {seq_len} must be a multiple of {cores}")
+    tile = query_tile(seq_len, grid)
+    if tile % 16:
+        # The GEMM takes a query tile that is a multiple of its MAC rows.
         raise ValueError(
-            f"seq_len {seq_len} must be a multiple of {QUERY_TILE * grid.num_rows}"
+            f"a core would hold {tile} query positions, not a multiple of 16"
         )
     if seq_len % 64:
         # The softmax kernel drops whatever does not fill its 64-element vector.
         raise ValueError(f"seq_len {seq_len} must be a multiple of 64")
-    if seq_len % KEY_TILE:
-        raise ValueError(f"seq_len {seq_len} must be a multiple of {KEY_TILE}")
+    if seq_len % _KEY_BLOCK:
+        raise ValueError(f"seq_len {seq_len} must be a multiple of {_KEY_BLOCK}")
     if d_head % 16:
         raise ValueError(f"d_head {d_head} must be a multiple of 16")
-    resident = 2 * seq_len * d_head * 2
+    resident = 2 * seq_len * d_head * BYTES_PER_ELEMENT
     if resident > MEMTILE_BYTES:
         raise ValueError(
             f"key and value need {resident} bytes resident, over the "
