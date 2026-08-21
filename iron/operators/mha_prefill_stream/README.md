@@ -42,9 +42,9 @@ therefore never sit fused behind a GEMM in that GEMM's own layout.
 | `Attn_Softmax` | `softmax_bf16` | 2 |
 | `Attn_Context` | `matmul_bf16_bf16_64_64_64` | 4 |
 
-Each group is deployed as its own xclbin rather than fused into one ELF, because the
-softmax's input is distributed straight from a shim tile to each of its cores and fusing
-the groups puts more of those transfers on one shim than it has DMA channels.
+The three groups are fused into one ELF. Each keeps its own `aie.device` and is
+configured in turn, so they do not share shim DMA channels; the channel bound is per
+design, and it is what caps the softmax at two cores.
 
 ## Limits, measured
 
@@ -65,6 +65,6 @@ axis splittable, which unlocks more columns, and it removes the whole-K/V reside
 
 At `seq_len=256, d_head=64` on Strix, against the golden at the tolerance
 `iron/operators/mha` meets (`rel_tol=4e-2, abs_tol=1.5e-1`), the largest deviation seen is
-`2.1e-2`. One head dispatches in about 1.7 ms and each further head adds about 1.2 ms,
-against a modelled 116 us of compute -- the gap is chained-xclbin dispatch overhead, about
-346 us of every 385 us dispatch, not the cost model.
+`2.1e-2`. One head takes about 484 us and each further head adds about 194 us, against a
+modelled 116 us of compute per head: the steady-state cost is 1.67x the model, in line
+with the ratio the SwiGLU design shows.

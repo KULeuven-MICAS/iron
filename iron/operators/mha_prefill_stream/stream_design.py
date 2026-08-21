@@ -82,10 +82,10 @@ GROUP_LAYERS = {
 MEMTILE_BYTES = 256 * 1024
 BYTES_PER_ELEMENT = 2
 
-# Rows the softmax runs on. Its input is distributed straight from the shim to each
-# core, one DMA channel each, so its core count is bounded by the shim's channels
-# rather than by the work.
-SOFTMAX_ROWS = (2, 3)
+# Which of a column's cores the softmax runs on, by index. Its input is distributed
+# straight from the shim to each core, one DMA channel each, so its core count is
+# bounded by the shim's channels rather than by the work: four does not build.
+SOFTMAX_CORES = (2, 3)
 
 
 @lru_cache(maxsize=None)
@@ -130,10 +130,10 @@ def _placements(seq_len, d_head, k):
         SCORES_NODE: Placement(scores_col, split, gemm(*tiles[SCORES_NODE])),
         SOFTMAX_NODE: Placement(
             softmax_col,
-            (("D0", len(SOFTMAX_ROWS)),),
+            (("D0", len(SOFTMAX_CORES)),),
             # One call reduces its whole buffer, so the tile is exactly one row.
             dict(m=1, n=seq_len, utilization=50.0, layout="contiguous"),
-            rows=SOFTMAX_ROWS,
+            rows=SOFTMAX_CORES,
         ),
         CONTEXT_NODE: Placement(context_col, split, gemm(*tiles[CONTEXT_NODE])),
     }
@@ -146,7 +146,7 @@ def _layer_tiling(layer, seq_len, d_head, grid, k):
     if layer == SCORES_NODE:
         return [("D0", query, query), ("D1", d_head, d_head), ("D2", KEY_TILE, seq_len)]
     if layer == SOFTMAX_NODE:
-        return [("D0", 1, seq_len // len(SOFTMAX_ROWS)), ("D1", seq_len, seq_len)]
+        return [("D0", 1, seq_len // len(SOFTMAX_CORES)), ("D1", seq_len, seq_len)]
     return [("D0", query, query), ("D1", KEY_TILE, seq_len), ("D2", d_head, d_head)]
 
 

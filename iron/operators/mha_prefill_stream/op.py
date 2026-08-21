@@ -116,11 +116,6 @@ class MHAPrefillStream(OperatorSequence):
     single head therefore occupies a single column. The projections around the core
     stay on IRON's own GEMM.
 
-    Each group is deployed as its own xclbin rather than fused into one ELF: the
-    softmax's input is distributed straight from a shim tile to each of its cores, and
-    fusing the groups puts more of those transfers on one shim than it has DMA
-    channels.
-
     The caller hands in a ``q`` already scaled by ``1/sqrt(d_head)`` and a ``k_t``
     already transposed; see
     :mod:`~iron.operators.mha_prefill_stream.reference`. Runtime buffers are named by
@@ -136,7 +131,7 @@ class MHAPrefillStream(OperatorSequence):
         k=None,
         context=None,
         share_designs=True,
-        dispatch="separate",
+        dispatch="auto",
     ):
         from iron.operators.mha_prefill_stream.stream_design import (
             LAYER_BY_LAYER,
