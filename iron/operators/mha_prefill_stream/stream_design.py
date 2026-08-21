@@ -62,7 +62,15 @@ OUTPUT_ROOT = "outputs"
 # The hand-written operators behave the same way in this flow, and are also fastest at
 # one column.
 GEMM_COLUMNS = 1
-SOFTMAX_COLUMN = GEMM_COLUMNS
+
+
+# The context GEMM writes d_head across its columns and its kernel takes at least a
+# 16-wide tile, so it cannot spread as far as the score GEMM, which writes the key.
+def _context_columns(d_head):
+    return min(GEMM_COLUMNS, max(d_head // 16, 1))
+
+
+SOFTMAX_COLUMN = 0
 # Memory tiles the solver may route through. Restricting it to the occupied
 # columns leaves the transfer allocation infeasible.
 COLUMNS_IN_USE = 8
@@ -108,12 +116,18 @@ def query_tile(seq_len, grid):
 
 
 def _scores_tile(seq_len, d_head):
-    """The score GEMM's (m, k, n). A group needs one dimension left to iterate, so the
-    key is streamed while it spans more than a block, and the contraction otherwise."""
-    tile, key = query_tile(seq_len, array()), seq_len // GEMM_COLUMNS
+    """The score GEMM's (m, k, n).
+
+    Exactly one dimension may iterate, since a tensor gets one reuse variable. Stream
+    the key while it spans more than a block, otherwise the contraction. Streaming the
+    query instead is expressible and builds, but the second block onwards comes back
+    wrong, so the key tile is bounded by the columns rather than by the query.
+    """
+    grid = array()
+    query, key = seq_len // grid.num_rows, seq_len // GEMM_COLUMNS
     if key > _KEY_BLOCK:
-        return tile, d_head, _KEY_BLOCK
-    return tile, d_head // 2, key
+        return query, d_head, _KEY_BLOCK
+    return query, d_head // 2, key
 
 
 def kernel_tiles(seq_len, d_head, k):
@@ -124,7 +138,7 @@ def kernel_tiles(seq_len, d_head, k):
         CONTEXT_NODE: (
             query_tile(seq_len, array()),
             key_tile(seq_len, k),
-            d_head // GEMM_COLUMNS,
+            d_head // _context_columns(d_head),
         ),
     }
 
@@ -136,14 +150,16 @@ def _placements(seq_len, d_head, k):
     grid = array()
     columns = grid.all_columns[:GEMM_COLUMNS]
     tiles = kernel_tiles(seq_len, d_head, k)
-    gemm_split = (("D0", grid.num_rows),) + (
-        (("D2", GEMM_COLUMNS),) if GEMM_COLUMNS > 1 else ()
-    )
+
+    def split(cols):
+        """Rows always, columns only when there is more than one to split over."""
+        return (("D0", grid.num_rows),) + ((("D2", cols),) if cols > 1 else ())
+
     gemm = lambda m, contraction, n: dict(  # noqa: E731
         m=m, k=contraction, n=n, utilization=61.8, layout="default", bfp16_mmul=True
     )
     return {
-        SCORES_NODE: Placement(columns, gemm_split, gemm(*tiles[SCORES_NODE])),
+        SCORES_NODE: Placement(columns, split(GEMM_COLUMNS), gemm(*tiles[SCORES_NODE])),
         SOFTMAX_NODE: Placement(
             (SOFTMAX_COLUMN,),
             (("D0", len(SOFTMAX_CORES)),),
@@ -151,7 +167,11 @@ def _placements(seq_len, d_head, k):
             dict(m=1, n=seq_len, utilization=50.0, layout="contiguous"),
             rows=SOFTMAX_CORES,
         ),
-        CONTEXT_NODE: Placement(columns, gemm_split, gemm(*tiles[CONTEXT_NODE])),
+        CONTEXT_NODE: Placement(
+            grid.all_columns[: _context_columns(d_head)],
+            split(_context_columns(d_head)),
+            gemm(*tiles[CONTEXT_NODE]),
+        ),
     }
 
 
@@ -159,15 +179,15 @@ def _layer_tiling(layer, seq_len, d_head, grid, k):
     """Each of the layer's dimensions, as (dim, tile, the extent one core holds)."""
     query = query_tile(seq_len, grid)
     if layer == SCORES_NODE:
-        _, contraction, key = _scores_tile(seq_len, d_head)
+        rows, contraction, key = _scores_tile(seq_len, d_head)
         return [
-            ("D0", query, query),
+            ("D0", rows, query),
             ("D1", contraction, d_head),
             ("D2", key, seq_len // GEMM_COLUMNS),
         ]
     if layer == SOFTMAX_NODE:
         return [("D0", 1, seq_len // len(SOFTMAX_CORES)), ("D1", seq_len, seq_len)]
-    head = d_head // GEMM_COLUMNS
+    head = d_head // _context_columns(d_head)
     return [
         ("D0", query, query),
         ("D1", key_tile(seq_len, k), seq_len),
@@ -202,7 +222,7 @@ def _check_shapes(seq_len, d_head):
     for name, extent, split in (
         ("query", seq_len, grid.num_rows),
         ("key", seq_len, GEMM_COLUMNS),
-        ("head", d_head, GEMM_COLUMNS),
+        ("head", d_head, _context_columns(d_head)),
     ):
         if extent % split or (extent // split) % 16:
             # A GEMM tile must be a multiple of its MAC dimensions.
