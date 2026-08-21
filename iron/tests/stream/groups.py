@@ -11,9 +11,11 @@ The checks read a mapping and a generated module rather than a design module, so
 stream-backed operator joins by adding a row to :data:`DESIGNS`.
 """
 
+import inspect
 import math
 import re
 from collections.abc import Collection
+from pathlib import Path
 
 import pytest
 import yaml
@@ -90,6 +92,28 @@ def design_findings(mlir: str, objects: Collection[str] | None = None) -> list[s
         linked = set(re.findall(r'link_with\s*=\s*"([^"]+)"', mlir))
         findings += [f"links unbuilt {name}" for name in sorted(linked - set(objects))]
     return findings
+
+
+# Implementation details that belong to iron.common.stream.design, and the helper each
+# one shows was copied rather than imported.
+COPIED_PLUMBING = {
+    "mlir_mod_ctx": "region_module",
+    "hashlib": "digest",
+    "IRON_TRACE_SIZE": "trace_size",
+    "IRON_TRACE_NTILES": "trace_tiles",
+    "final.mlir": "design_paths",
+    r"func\.func\s+private": "prefixed",
+}
+
+
+@pytest.mark.parametrize("operator", sorted(DESIGNS))
+def test_design_module_imports_the_shared_helpers(operator):
+    source = Path(inspect.getfile(DESIGNS[operator][0])).read_text()
+    copied = sorted({h for marker, h in COPIED_PLUMBING.items() if marker in source})
+    assert not copied, (
+        f"{operator}/stream_design.py reimplements {copied}; "
+        "import them from iron.common.stream.design"
+    )
 
 
 def _cases():

@@ -18,9 +18,7 @@ importing the operator does not require ``stream-dse`` to be installed, only
 building it does.
 """
 
-import hashlib
 import os
-import re
 from functools import lru_cache
 from pathlib import Path
 
@@ -28,6 +26,14 @@ import stream
 import torch
 from stream.api import optimize_allocation_co
 
+from iron.common.stream.design import (
+    design_paths,
+    digest,
+    group_text,
+    region_module,
+    trace_size,
+    trace_tiles,
+)
 from iron.common.stream.hardware import ComputeArray
 from iron.common.stream.mapping import (
     FusedGroup,
@@ -285,36 +291,6 @@ def _experiment_id(seq_len, embedding_dim, hidden_dim, k):
     )
 
 
-def trace_size():
-    """DDR trace buffer in bytes, 0 for an untraced build.
-
-    Opt-in: tracing adds a runtime-sequence argument, so it changes the ABI.
-    """
-    return int(os.environ.get("IRON_TRACE_SIZE", "0"))
-
-
-def trace_tiles():
-    """How many tiles to trace. Routing, not the packet id space, is the real limit."""
-    return int(os.environ.get("IRON_TRACE_NTILES", "4"))
-
-
-def _design_paths(seq_len, embedding_dim, hidden_dim, k):
-    """Where stream-dse writes each group's MLIR.
-
-    A single fused group goes through stream-dse's single-design pipeline and lands
-    in ``codegen/``; several groups each land in their own ``group_i/codegen/``.
-    """
-    output_dir = os.path.join(
-        OUTPUT_ROOT, _experiment_id(seq_len, embedding_dim, hidden_dim, k)
-    )
-    if k == 1:
-        return [os.path.join(output_dir, "codegen", "final.mlir")]
-    return [
-        os.path.join(output_dir, f"group_{index}", "codegen", "final.mlir")
-        for index in range(len(GROUP_LAYERS[k]))
-    ]
-
-
 def _run_codegen(seq_len, embedding_dim, hidden_dim, npu, k):
     """Run stream-dse's constraint optimization and code generation once."""
     grid = array()
@@ -342,75 +318,32 @@ def _run_codegen(seq_len, embedding_dim, hidden_dim, npu, k):
     )
 
 
-def _prefixed(mlir_text: str, func_prefix: str) -> str:
-    """Apply a fused-operator ``func_prefix`` (``op<idx>_``) to a group's MLIR.
-
-    ``OperatorSequence`` renames each child's kernel object files and symbols to
-    ``op<idx>_...`` so the groups stay distinct inside one ELF; the group's MLIR
-    must reference the same prefixed names. Prefix the ``link_with`` object files
-    and every privately declared kernel symbol, and its call sites.
-    """
-    if not func_prefix:
-        return mlir_text
-    mlir_text = re.sub(
-        r'link_with\s*=\s*"([^"]+)"',
-        lambda m: f'link_with = "{func_prefix}{m.group(1)}"',
-        mlir_text,
+def _design_paths(seq_len, embedding_dim, hidden_dim, k):
+    return design_paths(
+        os.path.join(
+            OUTPUT_ROOT, _experiment_id(seq_len, embedding_dim, hidden_dim, k)
+        ),
+        len(GROUP_LAYERS[k]),
     )
-    symbols = sorted(
-        set(re.findall(r"func\.func\s+private\s+@([A-Za-z0-9_]+)", mlir_text)),
-        key=len,
-        reverse=True,
-    )
-    for symbol in symbols:
-        mlir_text = re.sub(
-            rf"@{re.escape(symbol)}\b", f"@{func_prefix}{symbol}", mlir_text
-        )
-    return mlir_text
-
-
-def region_module(mlir_text: str, func_prefix: str = ""):
-    """Parse a group's MLIR text into an ``aie`` module for fusion.
-
-    ``OperatorSequence`` consumes ``aie.DeviceOp`` objects, so the xDSL-emitted
-    group text is re-parsed with the mlir-aie bindings, after ``func_prefix``
-    rewriting.
-    """
-    from aie import ir
-    from aie.extras.context import mlir_mod_ctx
-
-    with mlir_mod_ctx():
-        return ir.Module.parse(_prefixed(mlir_text, func_prefix))
 
 
 def _group_text(group_index, *, k, seq_len, embedding_dim, hidden_dim, npu) -> str:
-    """One group's generated MLIR, before any ``func_prefix`` rewriting."""
-    finals = _design_paths(seq_len, embedding_dim, hidden_dim, k)
-    if not all(os.path.exists(final) for final in finals):
-        _run_codegen(seq_len, embedding_dim, hidden_dim, npu, k)
-    return Path(finals[group_index]).read_text()
+    return group_text(
+        group_index,
+        _design_paths(seq_len, embedding_dim, hidden_dim, k),
+        lambda: _run_codegen(seq_len, embedding_dim, hidden_dim, npu, k),
+    )
 
 
 def group_digest(group_index, **dims) -> str:
     """Digest of a group's design, for recognising groups that share one."""
-    return hashlib.sha256(_group_text(group_index, **dims).encode()).hexdigest()
+    return digest(_group_text(group_index, **dims))
 
 
-def load_group(
-    group_index, func_prefix="", *, k, seq_len, embedding_dim, hidden_dim, npu
-):
+def load_group(group_index, func_prefix="", **dims):
     """Generate the ``k``-group design once and return one group's aie module.
 
     ``group_index`` selects the group, in the order :data:`GROUP_LAYERS` lists them.
-    ``func_prefix`` is injected by ``OperatorSequence``. Every group loader calls
-    this; the first generates the design and the rest reuse the files on disk.
+    ``func_prefix`` is injected by ``OperatorSequence``.
     """
-    text = _group_text(
-        group_index,
-        k=k,
-        seq_len=seq_len,
-        embedding_dim=embedding_dim,
-        hidden_dim=hidden_dim,
-        npu=npu,
-    )
-    return region_module(text, func_prefix)
+    return region_module(_group_text(group_index, **dims), func_prefix)
