@@ -56,10 +56,15 @@ ACCELERATOR = os.path.join(
 BACKEND = "ortools_gscip"  # license-free OR-Tools GSCIP, no Gurobi needed
 OUTPUT_ROOT = "outputs"
 
-# Columns the design occupies, one per layer. Only the query dimension is splittable
-# and a single dimension cannot be split over rows and columns at once, so a layer
-# takes one column; the layers take different ones so they never share a shim tile.
-COLUMNS_IN_USE = 3
+# Columns a GEMM layer spans, splitting its output dimension over them on top of the
+# query dimension over a column's rows. Kept at one: a distribute or a join costs one
+# object fifo per core, so widening adds DMA channels roughly as fast as it adds
+# compute, and measured 20% slower at two columns.
+GEMM_COLUMNS = 1
+SOFTMAX_COLUMN = GEMM_COLUMNS
+# Memory tiles the solver may route through. Restricting it to the occupied
+# columns leaves the transfer allocation infeasible.
+COLUMNS_IN_USE = 8
 
 # Key positions the score GEMM produces at a time. The softmax reduces the key
 # dimension and reads whole rows; a GEMM in a group of its own may block it, but one
@@ -82,10 +87,8 @@ GROUP_LAYERS = {
 MEMTILE_BYTES = 256 * 1024
 BYTES_PER_ELEMENT = 2
 
-# Which of a column's cores the softmax runs on, by index. Its input is distributed
-# straight from the shim to each core, one DMA channel each, so its core count is
-# bounded by the shim's channels rather than by the work: four does not build.
-SOFTMAX_CORES = (2, 3)
+# Which of a column's cores the softmax runs on, by index.
+SOFTMAX_CORES = (0, 1, 2, 3)
 
 
 @lru_cache(maxsize=None)
@@ -96,58 +99,66 @@ def array() -> ComputeArray:
     return ComputeArray.from_device(aie_utils.get_current_device())
 
 
-def _cores(grid):
-    """A column per layer, and how many cores one layer has."""
-    return grid.allocate([1] * COLUMNS_IN_USE), grid.num_rows
-
-
 def query_tile(seq_len, grid):
     """Query positions one core holds. A core takes its whole slice at once: a second
     temporal loop beside the key one would put two variables in a reuse window, which
     the object-fifo lowering does not express."""
-    return seq_len // _cores(grid)[1]
+    return seq_len // grid.num_rows
 
 
 def kernel_tiles(seq_len, d_head, k):
     """Each GEMM layer's kernel tile, in the (m, k, n) order the kernel takes. The
     kernel tile and the intra-core tile are the same tile, so they are declared once."""
-    tile, key = query_tile(seq_len, array()), key_tile(seq_len, k)
-    return {SCORES_NODE: (tile, d_head, key), CONTEXT_NODE: (tile, key, d_head)}
+    tile = query_tile(seq_len, array())
+    return {
+        SCORES_NODE: (tile, d_head, _KEY_BLOCK),
+        CONTEXT_NODE: (tile, key_tile(seq_len, k), d_head // GEMM_COLUMNS),
+    }
 
 
 def _placements(seq_len, d_head, k):
-    """Where each layer runs. Every layer takes the same columns, splitting the query
-    dimension over their cores, the only dimension a core may split."""
+    """Where each layer runs. A GEMM splits the query dimension over a column's rows and
+    its output dimension over the columns; the softmax splits only the query, its other
+    dimension being the reduction it may not divide."""
     grid = array()
-    columns, cores = _cores(grid)
-    scores_col, softmax_col, context_col = columns
+    columns = grid.all_columns[:GEMM_COLUMNS]
     tiles = kernel_tiles(seq_len, d_head, k)
-    split = (("D0", cores),)
+    gemm_split = (("D0", grid.num_rows),) + (
+        (("D2", GEMM_COLUMNS),) if GEMM_COLUMNS > 1 else ()
+    )
     gemm = lambda m, contraction, n: dict(  # noqa: E731
         m=m, k=contraction, n=n, utilization=61.8, layout="default", bfp16_mmul=True
     )
     return {
-        SCORES_NODE: Placement(scores_col, split, gemm(*tiles[SCORES_NODE])),
+        SCORES_NODE: Placement(columns, gemm_split, gemm(*tiles[SCORES_NODE])),
         SOFTMAX_NODE: Placement(
-            softmax_col,
+            (SOFTMAX_COLUMN,),
             (("D0", len(SOFTMAX_CORES)),),
             # One call reduces its whole buffer, so the tile is exactly one row.
             dict(m=1, n=seq_len, utilization=50.0, layout="contiguous"),
             rows=SOFTMAX_CORES,
         ),
-        CONTEXT_NODE: Placement(context_col, split, gemm(*tiles[CONTEXT_NODE])),
+        CONTEXT_NODE: Placement(columns, gemm_split, gemm(*tiles[CONTEXT_NODE])),
     }
 
 
 def _layer_tiling(layer, seq_len, d_head, grid, k):
     """Each of the layer's dimensions, as (dim, tile, the extent one core holds)."""
     query = query_tile(seq_len, grid)
-    KEY_TILE = key_tile(seq_len, k)
     if layer == SCORES_NODE:
-        return [("D0", query, query), ("D1", d_head, d_head), ("D2", KEY_TILE, seq_len)]
+        return [
+            ("D0", query, query),
+            ("D1", d_head, d_head),
+            ("D2", _KEY_BLOCK, seq_len // GEMM_COLUMNS),
+        ]
     if layer == SOFTMAX_NODE:
         return [("D0", 1, seq_len // len(SOFTMAX_CORES)), ("D1", seq_len, seq_len)]
-    return [("D0", query, query), ("D1", KEY_TILE, seq_len), ("D2", d_head, d_head)]
+    head = d_head // GEMM_COLUMNS
+    return [
+        ("D0", query, query),
+        ("D1", key_tile(seq_len, k), seq_len),
+        ("D2", head, head),
+    ]
 
 
 def _groups(seq_len, d_head, k):
@@ -174,15 +185,16 @@ def _groups(seq_len, d_head, k):
 
 def _check_shapes(seq_len, d_head):
     grid = array()
-    _, cores = _cores(grid)
-    if seq_len % cores:
-        raise ValueError(f"seq_len {seq_len} must be a multiple of {cores}")
-    tile = query_tile(seq_len, grid)
-    if tile % 16:
-        # The GEMM takes a query tile that is a multiple of its MAC rows.
-        raise ValueError(
-            f"a core would hold {tile} query positions, not a multiple of 16"
-        )
+    for name, extent, split in (
+        ("query", seq_len, grid.num_rows),
+        ("key", seq_len, GEMM_COLUMNS),
+        ("head", d_head, GEMM_COLUMNS),
+    ):
+        if extent % split or (extent // split) % 16:
+            # A GEMM tile must be a multiple of its MAC dimensions.
+            raise ValueError(
+                f"{name} {extent} split {split} ways is not a multiple of 16 per core"
+            )
     if seq_len % 64:
         # The softmax kernel drops whatever does not fill its 64-element vector.
         raise ValueError(f"seq_len {seq_len} must be a multiple of 64")
