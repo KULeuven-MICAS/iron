@@ -74,8 +74,8 @@ def _context_columns(d_head):
 
 
 SOFTMAX_COLUMN = 0
-# Memory tiles the solver may route through. Restricting it to the occupied
-# columns leaves the transfer allocation infeasible.
+# Memory tiles the solver may route through. The fused design spreads its shim traffic
+# over every column, which is what keeps eight heads inside a shim's buffer descriptors.
 COLUMNS_IN_USE = 8
 
 # Key positions the score GEMM produces at a time. The softmax reduces the key
@@ -97,6 +97,7 @@ GROUP_LAYERS = {
 # A memory tile holds the head's whole key and value, since neither the key nor the
 # head dimension can be tiled away. Measured against the 256 KB Strix memory tile.
 MEMTILE_BYTES = 256 * 1024
+CORE_BYTES = 64 * 1024
 BYTES_PER_ELEMENT = 2
 
 # Which of a column's cores the softmax runs on, by index.
@@ -290,6 +291,18 @@ def _check_shapes(seq_len, d_head, k):
         raise ValueError(f"seq_len {seq_len} must be a multiple of 64")
     if seq_len % _KEY_BLOCK:
         raise ValueError(f"seq_len {seq_len} must be a multiple of {_KEY_BLOCK}")
+    if k == 1:
+        # The fused score core holds the head's whole key beside its own double-buffered
+        # query and score tiles, and a memory tile no longer bounds it.
+        query = FUSED_QUERY_TILE
+        resident = BYTES_PER_ELEMENT * (
+            d_head * seq_len + 2 * query * d_head + 2 * query * seq_len
+        )
+        if resident > CORE_BYTES:
+            raise ValueError(
+                f"the fused score core needs {resident} bytes, over the {CORE_BYTES} "
+                f"byte core; block the key dimension to go further"
+            )
     if d_head % 16:
         raise ValueError(f"d_head {d_head} must be a multiple of 16")
     resident = 2 * seq_len * d_head * BYTES_PER_ELEMENT
