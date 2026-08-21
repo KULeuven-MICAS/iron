@@ -58,8 +58,9 @@ OUTPUT_ROOT = "outputs"
 
 # Columns a GEMM layer spans, splitting its output dimension over them on top of the
 # query dimension over a column's rows. Kept at one: a distribute or a join costs one
-# object fifo per core, so widening adds DMA channels roughly as fast as it adds
-# compute, and measured 20% slower at two columns.
+# object fifo per core, so widening adds DMA channels about as fast as it adds compute.
+# The hand-written operators behave the same way in this flow, and are also fastest at
+# one column.
 GEMM_COLUMNS = 1
 SOFTMAX_COLUMN = GEMM_COLUMNS
 # Memory tiles the solver may route through. Restricting it to the occupied
@@ -106,13 +107,25 @@ def query_tile(seq_len, grid):
     return seq_len // grid.num_rows
 
 
+def _scores_tile(seq_len, d_head):
+    """The score GEMM's (m, k, n). A group needs one dimension left to iterate, so the
+    key is streamed while it spans more than a block, and the contraction otherwise."""
+    tile, key = query_tile(seq_len, array()), seq_len // GEMM_COLUMNS
+    if key > _KEY_BLOCK:
+        return tile, d_head, _KEY_BLOCK
+    return tile, d_head // 2, key
+
+
 def kernel_tiles(seq_len, d_head, k):
     """Each GEMM layer's kernel tile, in the (m, k, n) order the kernel takes. The
     kernel tile and the intra-core tile are the same tile, so they are declared once."""
-    tile = query_tile(seq_len, array())
     return {
-        SCORES_NODE: (tile, d_head, _KEY_BLOCK),
-        CONTEXT_NODE: (tile, key_tile(seq_len, k), d_head // GEMM_COLUMNS),
+        SCORES_NODE: _scores_tile(seq_len, d_head),
+        CONTEXT_NODE: (
+            query_tile(seq_len, array()),
+            key_tile(seq_len, k),
+            d_head // GEMM_COLUMNS,
+        ),
     }
 
 
@@ -146,10 +159,11 @@ def _layer_tiling(layer, seq_len, d_head, grid, k):
     """Each of the layer's dimensions, as (dim, tile, the extent one core holds)."""
     query = query_tile(seq_len, grid)
     if layer == SCORES_NODE:
+        _, contraction, key = _scores_tile(seq_len, d_head)
         return [
             ("D0", query, query),
-            ("D1", d_head, d_head),
-            ("D2", _KEY_BLOCK, seq_len // GEMM_COLUMNS),
+            ("D1", contraction, d_head),
+            ("D2", key, seq_len // GEMM_COLUMNS),
         ]
     if layer == SOFTMAX_NODE:
         return [("D0", 1, seq_len // len(SOFTMAX_CORES)), ("D1", seq_len, seq_len)]
