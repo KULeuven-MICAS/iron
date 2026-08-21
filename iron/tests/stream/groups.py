@@ -29,12 +29,14 @@ from aie.iron.device import NPU2  # noqa: E402
 
 aie_utils.set_current_device(NPU2())
 
+from iron.operators.mha_prefill_stream import stream_design as mha  # noqa: E402
 from iron.operators.swiglu_prefill_stream import stream_design as swiglu  # noqa: E402
 
 # Stream-backed operators these checks cover, as (design module, dimensions, the group
 # counts it is built for).
 DESIGNS = {
     "swiglu": (swiglu, (256, 512, 2048), (1, 2, 5)),
+    "mha": (mha, (256, 64), (mha.LAYER_BY_LAYER,)),
 }
 
 
