@@ -29,42 +29,57 @@ elementwise pass over the whole `seq x seq` score matrix.
 group, and the generated design has no operand transform to undo one. The host already
 transposes K in the llama prefill path, so this costs nothing new.
 
-## The three groups
+## One group or three
 
-The core is generated layer by layer, one design per node, because `softmax_bf16` reduces
-its whole input buffer in a single call: its tile has to be exactly one row, laid out
-contiguously, and a GEMM writes a MAC-tiled layout that scatters a row. A softmax can
-therefore never sit fused behind a GEMM in that GEMM's own layout.
+`k=1` puts all three layers in one design. The softmax reads its row linearly while the
+GEMM either side of it writes and reads a MAC-tiled layout, so the score and the
+probability matrix are **staged on a memory tile** on the way between them: a plain copy
+from the producing core into the tile, then a transformed transfer out of it that re-lays
+the tile out row major. Four dimensions are needed for that transform and a core DMA takes
+three, which is why the hop through the tile is what makes the fusion possible at all.
+Neither matrix touches a shim or DDR.
 
-| group | kernel | cores |
+The layers take a row each of the same four columns, so they run at once and pipeline; the
+query dimension splits over the columns, since it cannot split over rows and columns both.
+The head's whole key and value stay resident on the cores that read them -- 32 KB of a
+64 KB core at `seq_len = 256` -- which is what bounds the query tile to 16 positions.
+
+`k=3` puts each layer in its own design; the three are still fused into one ELF, but each
+keeps its own `aie.device` and is configured in turn. Every intermediate then goes out to
+DDR and back, which costs a full configure and round trip per layer per head.
+
+| | `k=1` | `k=3` |
 |---|---|---|
-| `Attn_Scores` | `matmul_bf16_bf16_64_64_64` | 4 |
-| `Attn_Softmax` | `softmax_bf16` | 2 |
-| `Attn_Context` | `matmul_bf16_bf16_64_64_64` | 4 |
-
-The three groups are fused into one ELF. Each keeps its own `aie.device` and is
-configured in turn, so they do not share shim DMA channels; the channel bound is per
-design, and it is what caps the softmax at two cores.
+| designs | 1 | 3 |
+| cores | 12 (4 columns x 3 rows) | 4 per layer, in turn |
+| score / probability matrix | core -> memory tile -> core | core -> DDR -> core |
 
 ## Limits, measured
 
-- **One column per layer.** The query dimension is the only one a core may split: the head
-  dimension is the score GEMM's contraction and the backend has no cross-core
-  accumulation, and the key dimension is the softmax's reduction. A single dimension
-  cannot be split over rows and columns at once, so a 2-column split already fails the
-  object-fifo lowering.
-- **The softmax runs on two cores**, bounded by shim DMA channels rather than by the work.
+- **The query dimension is the only one a core may split**: the head dimension is the score
+  GEMM's contraction and the backend has no cross-core accumulation, and the key dimension
+  is the softmax's reduction. It cannot split over rows and columns at once, so the fused
+  design spends its rows on the layers and its columns on the query.
+- **Four columns.** Widening the fused design costs more to configure than it saves in
+  compute: at eight columns one head takes 318 us against 244 us at four. Two columns is
+  faster below three heads and slower above them.
 - **Sequence length is bounded by memory-tile capacity.** Key and value stay whole, so
   `2 * seq_len * d_head * 2` bytes must fit a 256 KB memory tile: `seq_len = 256` is
   comfortable and `2048` is infeasible. `_check_shapes` rejects the rest up front.
 
-Blocking the key dimension (flash attention) is what lifts all three: it makes the key
-axis splittable, which unlocks more columns, and it removes the whole-K/V residency bound.
+Blocking the key dimension (flash attention) is what lifts these: it makes the key axis
+splittable, which unlocks more columns, and it removes the whole-K/V residency bound.
 
 ## Numbers
 
 At `seq_len=256, d_head=64` on Strix, against the golden at the tolerance
 `iron/operators/mha` meets (`rel_tol=4e-2, abs_tol=1.5e-1`), the largest deviation seen is
-`2.1e-2`. One head takes about 484 us and each further head adds about 194 us, against a
-modelled 116 us of compute per head: the steady-state cost is 1.67x the model, in line
-with the ratio the SwiGLU design shows.
+`2.7e-2`.
+
+| heads | 1 | 2 | 4 | 8 |
+|---|---|---|---|---|
+| `k=1` | 244 us | 278 us | 346 us | 489 us |
+| `k=3` | 337 us | 621 us | | |
+
+`k=1` costs about 35 us per further head against `k=3`'s 283: what a group boundary buys
+back is a configure and a DDR round trip of the score and probability matrices per head.

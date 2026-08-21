@@ -10,7 +10,10 @@ and the runtime arguments all carry the same names.
 Only the query dimension is splittable across cores: the head dimension is the score
 GEMM's contraction and nothing accumulates partial sums between cores, and the key
 dimension is the softmax's reduction. A single dimension cannot be split over rows and
-over columns at once, so one head occupies one column.
+over columns at once, which is what sets the two shapes the design comes in: split into
+one group per layer (``k=3``) each layer has a column to itself and splits the query over
+its rows; fused into one group (``k=1``) the three layers take a row each and the query
+splits over the columns instead.
 """
 
 import os
@@ -99,6 +102,14 @@ BYTES_PER_ELEMENT = 2
 # Which of a column's cores the softmax runs on, by index.
 SOFTMAX_CORES = (0, 1, 2, 3)
 
+# The fused design runs its three layers at once, so each takes one row of every column
+# it spans and the query dimension splits over the columns instead of over the rows.
+FUSED_COLUMNS = 4
+FUSED_ROWS = {SCORES_NODE: (0,), SOFTMAX_NODE: (1,), CONTEXT_NODE: (2,)}
+# Query positions a fused GEMM works at a time. The head's whole key or value sits on the
+# core beside them -- 32 KB of a 64 KB core at seq_len 256 -- so the tile is what is left.
+FUSED_QUERY_TILE = 16
+
 
 @lru_cache(maxsize=None)
 def array() -> ComputeArray:
@@ -108,23 +119,42 @@ def array() -> ComputeArray:
     return ComputeArray.from_device(aie_utils.get_current_device())
 
 
-def query_tile(seq_len, grid):
-    """Query positions one core holds. A core takes its whole slice at once: a second
-    temporal loop beside the key one would put two variables in a reuse window, which
-    the object-fifo lowering does not express."""
-    return seq_len // grid.num_rows
+def query_split(k):
+    """How many cores the query dimension splits over: a column's rows while each layer
+    has the column to itself, the columns once the three layers take a row each."""
+    return FUSED_COLUMNS if k == 1 else array().num_rows
 
 
-def _scores_tile(seq_len, d_head):
+def query_per_core(seq_len, k):
+    return seq_len // query_split(k)
+
+
+def query_tile(seq_len, k):
+    """Query positions one core works at a time. Split off, a core takes its whole slice
+    at once: a second temporal loop beside the key one would put two variables in a reuse
+    window, which the object-fifo lowering does not express. Fused, the key and the value
+    are resident beside the tile, so the query is what iterates instead."""
+    return FUSED_QUERY_TILE if k == 1 else query_per_core(seq_len, k)
+
+
+def _softmax_rows(seq_len, k):
+    """Query rows one softmax call normalizes. Fused, the group's layers share one query
+    tile and the kernel loops the rows of it; split off, the tile is a single row."""
+    return query_tile(seq_len, k) if k == 1 else 1
+
+
+def _scores_tile(seq_len, d_head, k):
     """The score GEMM's (m, k, n).
 
-    Exactly one dimension may iterate, since a tensor gets one reuse variable. Stream
-    the key while it spans more than a block, otherwise the contraction. Streaming the
-    query instead is expressible and builds, but the second block onwards comes back
-    wrong, so the key tile is bounded by the columns rather than by the query.
+    Exactly one dimension may iterate, since a tensor gets one reuse variable. Fused, the
+    softmax behind it reduces a whole row, so the key has to come out whole and the query
+    is what streams. Split off, stream the key while it spans more than a block, otherwise
+    the contraction: streaming the query instead is expressible and builds, but the second
+    block onwards comes back wrong.
     """
-    grid = array()
-    query, key = seq_len // grid.num_rows, seq_len // GEMM_COLUMNS
+    query, key = query_tile(seq_len, k), seq_len // GEMM_COLUMNS
+    if k == 1:
+        return query, d_head, seq_len
     if key > _KEY_BLOCK:
         return query, d_head, _KEY_BLOCK
     return query, d_head // 2, key
@@ -134,9 +164,9 @@ def kernel_tiles(seq_len, d_head, k):
     """Each GEMM layer's kernel tile, in the (m, k, n) order the kernel takes. The
     kernel tile and the intra-core tile are the same tile, so they are declared once."""
     return {
-        SCORES_NODE: _scores_tile(seq_len, d_head),
+        SCORES_NODE: _scores_tile(seq_len, d_head, k),
         CONTEXT_NODE: (
-            query_tile(seq_len, array()),
+            query_tile(seq_len, k),
             key_tile(seq_len, k),
             d_head // _context_columns(d_head),
         ),
@@ -144,11 +174,15 @@ def kernel_tiles(seq_len, d_head, k):
 
 
 def _placements(seq_len, d_head, k):
-    """Where each layer runs. A GEMM splits the query dimension over a column's rows and
-    its output dimension over the columns; the softmax splits only the query, its other
-    dimension being the reduction it may not divide."""
+    """Where each layer runs.
+
+    Fused, the three layers run at once and take a row each of the same columns, splitting
+    the query over those columns. Split off, each layer has the column to itself: a GEMM
+    then splits the query over the column's rows and its output dimension over the columns,
+    and the softmax splits only the query, its other dimension being the reduction it may
+    not divide.
+    """
     grid = array()
-    columns = grid.all_columns[:GEMM_COLUMNS]
     tiles = kernel_tiles(seq_len, d_head, k)
 
     def split(cols):
@@ -158,13 +192,37 @@ def _placements(seq_len, d_head, k):
     gemm = lambda m, contraction, n: dict(  # noqa: E731
         m=m, k=contraction, n=n, utilization=61.8, layout="default", bfp16_mmul=True
     )
+    # A row at a time, over the MAC tile bounds of the GEMMs either side of it.
+    softmax = dict(
+        m=_softmax_rows(seq_len, k),
+        n=seq_len,
+        utilization=50.0,
+        layout="contiguous",
+        bfp16_mmul=True,
+    )
+    if k == 1:
+        columns = grid.all_columns[:FUSED_COLUMNS]
+        kwargs = {
+            SCORES_NODE: gemm(*tiles[SCORES_NODE]),
+            SOFTMAX_NODE: softmax,
+            CONTEXT_NODE: gemm(*tiles[CONTEXT_NODE]),
+        }
+        return {
+            layer: Placement(
+                columns, (("D0", FUSED_COLUMNS),), kw, rows=FUSED_ROWS[layer]
+            )
+            for layer, kw in kwargs.items()
+        }
     return {
-        SCORES_NODE: Placement(columns, split(GEMM_COLUMNS), gemm(*tiles[SCORES_NODE])),
+        SCORES_NODE: Placement(
+            grid.all_columns[:GEMM_COLUMNS],
+            split(GEMM_COLUMNS),
+            gemm(*tiles[SCORES_NODE]),
+        ),
         SOFTMAX_NODE: Placement(
             (SOFTMAX_COLUMN,),
             (("D0", len(SOFTMAX_CORES)),),
-            # One call reduces its whole buffer, so the tile is exactly one row.
-            dict(m=1, n=seq_len, utilization=50.0, layout="contiguous"),
+            softmax,
             rows=SOFTMAX_CORES,
         ),
         CONTEXT_NODE: Placement(
@@ -175,21 +233,21 @@ def _placements(seq_len, d_head, k):
     }
 
 
-def _layer_tiling(layer, seq_len, d_head, grid, k):
+def _layer_tiling(layer, seq_len, d_head, k):
     """Each of the layer's dimensions, as (dim, tile, the extent one core holds)."""
-    query = query_tile(seq_len, grid)
+    query = query_per_core(seq_len, k)
     if layer == SCORES_NODE:
-        rows, contraction, key = _scores_tile(seq_len, d_head)
+        rows, contraction, key = _scores_tile(seq_len, d_head, k)
         return [
             ("D0", rows, query),
             ("D1", contraction, d_head),
             ("D2", key, seq_len // GEMM_COLUMNS),
         ]
     if layer == SOFTMAX_NODE:
-        return [("D0", 1, seq_len // len(SOFTMAX_CORES)), ("D1", seq_len, seq_len)]
+        return [("D0", _softmax_rows(seq_len, k), query), ("D1", seq_len, seq_len)]
     head = d_head // _context_columns(d_head)
     return [
-        ("D0", query, query),
+        ("D0", query_tile(seq_len, k), query),
         ("D1", key_tile(seq_len, k), seq_len),
         ("D2", head, head),
     ]
@@ -201,7 +259,6 @@ def _groups(seq_len, d_head, k):
     A dimension a core already holds whole is left out: the loop would run once and
     still cost a reuse variable, and a tensor gets one.
     """
-    grid = array()
     return [
         FusedGroup(
             f"Fused_Group_{index + 1}",
@@ -209,7 +266,7 @@ def _groups(seq_len, d_head, k):
             [
                 (layer, dim, tile)
                 for layer in layers
-                for dim, tile, extent in _layer_tiling(layer, seq_len, d_head, grid, k)
+                for dim, tile, extent in _layer_tiling(layer, seq_len, d_head, k)
                 if tile < extent
             ],
         )
@@ -217,10 +274,9 @@ def _groups(seq_len, d_head, k):
     ]
 
 
-def _check_shapes(seq_len, d_head):
-    grid = array()
+def _check_shapes(seq_len, d_head, k):
     for name, extent, split in (
-        ("query", seq_len, grid.num_rows),
+        ("query", seq_len, query_split(k)),
         ("key", seq_len, GEMM_COLUMNS),
         ("head", d_head, _context_columns(d_head)),
     ):
@@ -258,7 +314,7 @@ def workload_for(seq_len, d_head):
 
 def build_inputs(seq_len, d_head, output_dir, k=LAYER_BY_LAYER):
     """Write the workload and mapping for one configuration; return their paths."""
-    _check_shapes(seq_len, d_head)
+    _check_shapes(seq_len, d_head, k)
     workload = workload_for(seq_len, d_head)
     output_dir = Path(output_dir)
     return (
