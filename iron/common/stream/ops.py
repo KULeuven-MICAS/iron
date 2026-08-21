@@ -27,7 +27,7 @@ from onnx import defs
 from onnxscript import opset18
 from onnxscript.values import Op, Opset
 
-from iron.common.layout import TiledStridedLayout, tiled_2d
+from iron.common.layout import TiledStridedLayout, contiguous_2d, tiled_2d
 
 # Intrinsic MAC tile dimensions of the aie2p kernels stream-dse targets. The
 # operand layouts are the contract the generated DMAs and the compiled kernel
@@ -79,6 +79,15 @@ def elementwise_layouts(
     return (tiled_2d(*ELEMENTWISE_TILE, mac_rows(bfp16_mmul), T),) * nb_operands
 
 
+def softmax_layouts(n: int) -> tuple[TiledStridedLayout, ...]:
+    """Layouts of the softmax's input and output.
+
+    ``softmax.cc`` keeps one maximum and one sum over the length it is handed and
+    takes no stride, so its tile is a single row and that row has to be contiguous.
+    """
+    return (contiguous_2d(1, n),) * 2
+
+
 def _gemm_artifacts(base_dir, kernel_dir, m: int, k: int, n: int):
     """The ``mm.cc`` object specialized for one tile shape.
 
@@ -128,9 +137,15 @@ class StreamKernel:
     source: str | None = None
     subdir: str | None = None
     artifacts: Callable | None = None  # overrides source/subdir when tile-specialized
+    only_on: str | None = None  # device directory the binding is written against
 
     def kernel_artifacts(self, base_dir, kernel_dir, **kwargs):
         """Compilation artifacts building this kernel's object file."""
+        if self.only_on is not None and kernel_dir != self.only_on:
+            raise NotImplementedError(
+                f"the stream-dse '{self.key}' kernel is written against "
+                f"{self.only_on}, not {kernel_dir}"
+            )
         if self.artifacts is not None:
             return self.artifacts(base_dir, kernel_dir, **kwargs)
         from iron.common.compilation import KernelObjectArtifact, SourceArtifact
@@ -156,6 +171,11 @@ ELTWISE_MUL = StreamKernel(
     source="mul",
     subdir="generic",
 )
+# aie2's softmax.cc is a different algorithm, over 16-element vectors and needing
+# lut_based_ops.o, that neither the layouts nor the stream-dse kernel describe.
+SOFTMAX = StreamKernel(
+    key="softmax", layouts=softmax_layouts, source="softmax", only_on="aie2p"
+)
 
 Silu = custom_op("Silu")
 
@@ -170,6 +190,13 @@ def _to_silu(x):
 
 def _to_mul(a, b):
     return opset18.Mul(a, b)
+
+
+def _to_softmax(x, dim):
+    """Pinned to a single node: the torchlib lowering can add a ``Cast``, and any
+    extra node shifts the positional renaming of the exported graph. A ``dtype``
+    argument has nowhere to go here and is rejected rather than dropped."""
+    return opset18.Softmax(x, axis=dim)
 
 
 @dataclass(frozen=True)
@@ -194,6 +221,7 @@ TORCH_OPS: dict[Callable, StreamOp] = {
     torch.ops.aten.matmul.default: StreamOp("Gemm", GEMM, _to_gemm),
     torch.ops.aten.silu.default: StreamOp("Silu", SILU, _to_silu),
     torch.ops.aten.mul.Tensor: StreamOp("Mul", ELTWISE_MUL, _to_mul),
+    torch.ops.aten.softmax.int: StreamOp("Softmax", SOFTMAX, _to_softmax),
 }
 
 _BY_ONNX_TYPE = {op.onnx_type: op for op in TORCH_OPS.values()}

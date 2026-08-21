@@ -24,8 +24,10 @@ from iron.common.stream.ops import (  # noqa: E402
     ELTWISE_MUL,
     GEMM,
     SILU,
+    SOFTMAX,
     elementwise_layouts,
     gemm_layouts,
+    softmax_layouts,
 )
 
 
@@ -60,6 +62,14 @@ def test_eltwise_mul_layouts_match_stream(bfp16_mmul):
     )
 
 
-@pytest.mark.parametrize("kernel", [GEMM, SILU, ELTWISE_MUL])
+@pytest.mark.parametrize("n", [64, 128, 256])
+def test_softmax_layouts_match_stream(n):
+    _assert_same(
+        softmax_layouts(n),
+        AIEKernels[SOFTMAX.key](50.0, n=n, layout="contiguous"),
+    )
+
+
+@pytest.mark.parametrize("kernel", [GEMM, SILU, ELTWISE_MUL, SOFTMAX])
 def test_kernel_keys_exist_in_stream(kernel):
     assert kernel.key in AIEKernels

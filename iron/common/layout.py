@@ -105,3 +105,15 @@ def tiled_2d(rows: int, cols: int, row_unit: int, col_unit: int) -> TiledStrided
             TiledStride((Stride(row_unit * col_unit, cols_t), Stride(1, col_unit))),
         )
     )
+
+
+def contiguous_2d(rows: int, cols: int) -> TiledStridedLayout:
+    """Plain row-major layout for a ``rows x cols`` tensor.
+
+    One stride level per dimension, so a transfer runs the length of a row rather
+    than one tile at a time. This is what a kernel that walks an operand linearly
+    wants, and what stream-dse's ``contiguous`` operand layout is.
+    """
+    return TiledStridedLayout(
+        (TiledStride((Stride(cols, rows),)), TiledStride((Stride(1, cols),)))
+    )
