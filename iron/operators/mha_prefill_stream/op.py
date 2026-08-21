@@ -65,22 +65,19 @@ class _MHAStreamGroup(MLIROperator):
 
     def get_kernel_artifacts(self):
         design = self._design
-        tile = (design.QUERY_TILE, design.KEY_TILE, self.d_head)
+        tiles = design.kernel_tiles(self.seq_len, self.d_head, self.k)
         per_layer = {
-            design.SCORES_NODE: (
-                GEMM,
-                (design.QUERY_TILE, self.d_head, design.KEY_TILE),
-            ),
-            design.CONTEXT_NODE: (GEMM, tile),
+            design.SCORES_NODE: (GEMM, tiles[design.SCORES_NODE]),
+            design.CONTEXT_NODE: (GEMM, tiles[design.CONTEXT_NODE]),
             design.SOFTMAX_NODE: (SOFTMAX, None),
         }
         layers = design.GROUP_LAYERS[self.k][self.group_index]
         base_dir, kernel_dir = self.context.base_dir, get_kernel_dir()
         return [
             artifact
-            for kernel, tiles in dict.fromkeys(per_layer[layer] for layer in layers)
+            for kernel, tile in dict.fromkeys(per_layer[layer] for layer in layers)
             for artifact in kernel.kernel_artifacts(
-                base_dir, kernel_dir, **(dict(zip("mkn", tiles)) if tiles else {})
+                base_dir, kernel_dir, **(dict(zip("mkn", tile)) if tile else {})
             )
         ]
 
@@ -119,6 +116,11 @@ class MHAPrefillStream(OperatorSequence):
     single head therefore occupies a single column. The projections around the core
     stay on IRON's own GEMM.
 
+    Each group is deployed as its own xclbin rather than fused into one ELF: the
+    softmax's input is distributed straight from a shim tile to each of its cores, and
+    fusing the groups puts more of those transfers on one shim than it has DMA
+    channels.
+
     The caller hands in a ``q`` already scaled by ``1/sqrt(d_head)`` and a ``k_t``
     already transposed; see
     :mod:`~iron.operators.mha_prefill_stream.reference`. Runtime buffers are named by
@@ -134,7 +136,7 @@ class MHAPrefillStream(OperatorSequence):
         k=None,
         context=None,
         share_designs=True,
-        dispatch="auto",
+        dispatch="separate",
     ):
         from iron.operators.mha_prefill_stream.stream_design import (
             LAYER_BY_LAYER,

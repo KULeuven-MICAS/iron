@@ -82,6 +82,11 @@ GROUP_LAYERS = {
 MEMTILE_BYTES = 256 * 1024
 BYTES_PER_ELEMENT = 2
 
+# Rows the softmax runs on. Its input is distributed straight from the shim to each
+# core, one DMA channel each, so its core count is bounded by the shim's channels
+# rather than by the work.
+SOFTMAX_ROWS = (2, 3)
+
 
 @lru_cache(maxsize=None)
 def array() -> ComputeArray:
@@ -103,30 +108,34 @@ def query_tile(seq_len, grid):
     return seq_len // _cores(grid)[1]
 
 
+def kernel_tiles(seq_len, d_head, k):
+    """Each GEMM layer's kernel tile, in the (m, k, n) order the kernel takes. The
+    kernel tile and the intra-core tile are the same tile, so they are declared once."""
+    tile, key = query_tile(seq_len, array()), key_tile(seq_len, k)
+    return {SCORES_NODE: (tile, d_head, key), CONTEXT_NODE: (tile, key, d_head)}
+
+
 def _placements(seq_len, d_head, k):
     """Where each layer runs. Every layer takes the same columns, splitting the query
     dimension over their cores, the only dimension a core may split."""
     grid = array()
     columns, cores = _cores(grid)
-    tile = query_tile(seq_len, grid)
     scores_col, softmax_col, context_col = columns
+    tiles = kernel_tiles(seq_len, d_head, k)
     split = (("D0", cores),)
     gemm = lambda m, contraction, n: dict(  # noqa: E731
         m=m, k=contraction, n=n, utilization=61.8, layout="default", bfp16_mmul=True
     )
     return {
-        SCORES_NODE: Placement(
-            scores_col, split, gemm(tile, d_head, key_tile(seq_len, k))
-        ),
+        SCORES_NODE: Placement(scores_col, split, gemm(*tiles[SCORES_NODE])),
         SOFTMAX_NODE: Placement(
             softmax_col,
-            split,
+            (("D0", len(SOFTMAX_ROWS)),),
             # One call reduces its whole buffer, so the tile is exactly one row.
             dict(m=1, n=seq_len, utilization=50.0, layout="contiguous"),
+            rows=SOFTMAX_ROWS,
         ),
-        CONTEXT_NODE: Placement(
-            context_col, split, gemm(tile, key_tile(seq_len, k), d_head)
-        ),
+        CONTEXT_NODE: Placement(context_col, split, gemm(*tiles[CONTEXT_NODE])),
     }
 
 
@@ -137,7 +146,7 @@ def _layer_tiling(layer, seq_len, d_head, grid, k):
     if layer == SCORES_NODE:
         return [("D0", query, query), ("D1", d_head, d_head), ("D2", KEY_TILE, seq_len)]
     if layer == SOFTMAX_NODE:
-        return [("D0", 1, query), ("D1", seq_len, seq_len)]
+        return [("D0", 1, seq_len // len(SOFTMAX_ROWS)), ("D1", seq_len, seq_len)]
     return [("D0", query, query), ("D1", KEY_TILE, seq_len), ("D2", d_head, d_head)]
 
 
