@@ -166,6 +166,13 @@ void softmax_bf16(bfloat16 *restrict input, bfloat16 *restrict output, const int
     softmax_simple_bf16(input, output, input_size);
 }
 
+void softmax_rows_bf16(bfloat16 *restrict input, bfloat16 *restrict output, const int32_t rows, const int32_t row_len)
+{
+    for (int32_t r = 0; r < rows; r++) {
+        softmax_simple_bf16(input + r * row_len, output + r * row_len, row_len);
+    }
+}
+
 void partial_softmax_bf16(bfloat16 *restrict input,
                           bfloat16 *restrict output,
                           bfloat16 *restrict scale_buffer,
