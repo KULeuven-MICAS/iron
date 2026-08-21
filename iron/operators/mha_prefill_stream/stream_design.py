@@ -58,12 +58,14 @@ COLUMNS_IN_USE = 4
 OUTPUT_ROOT = "outputs"
 
 # Query positions a core holds at a time. The score block it produces is this many
-# whole rows, so a row reaches the softmax contiguous.
-QUERY_TILE = 32
+# whole rows, so a row reaches the softmax contiguous. A core takes its whole query
+# slice at once: a second temporal loop beside the key one would put two variables in
+# a reuse window, which the object-fifo lowering does not express.
+QUERY_TILE = 64
 
 # Key positions the score GEMM produces at a time. The softmax reduces the key
 # dimension and so reads whole rows, but the GEMM ahead of it does not have to.
-KEY_TILE = 128
+KEY_TILE = 64
 
 LAYER_BY_LAYER = 3
 GROUP_LAYERS = {
@@ -100,33 +102,45 @@ def _placements(seq_len, d_head, k):
             # One call reduces its whole buffer, so the tile is exactly one row.
             dict(m=1, n=seq_len, utilization=50.0, layout="contiguous"),
         ),
-        CONTEXT_NODE: Placement(columns[2], split, gemm(QUERY_TILE, seq_len, d_head)),
+        CONTEXT_NODE: Placement(columns[2], split, gemm(QUERY_TILE, KEY_TILE, d_head)),
     }
+
+
+def _layer_tiling(layer, seq_len, d_head, rows):
+    """Each of the layer's dimensions, as (dim, tile, the extent one core holds)."""
+    query = seq_len // rows
+    if layer == SCORES_NODE:
+        return [
+            ("D0", QUERY_TILE, query),
+            ("D1", d_head, d_head),
+            ("D2", KEY_TILE, seq_len),
+        ]
+    if layer == SOFTMAX_NODE:
+        return [("D0", 1, query), ("D1", seq_len, seq_len)]
+    return [
+        ("D0", QUERY_TILE, query),
+        ("D1", KEY_TILE, seq_len),
+        ("D2", d_head, d_head),
+    ]
 
 
 def _groups(seq_len, d_head, k):
-    """The fused groups, each with the intra-core tiling of its layers' dimensions."""
-    tiling = {
-        SCORES_NODE: [
-            (SCORES_NODE, "D1", d_head),
-            (SCORES_NODE, "D2", KEY_TILE),
-            (SCORES_NODE, "D0", QUERY_TILE),
-        ],
-        SOFTMAX_NODE: [
-            (SOFTMAX_NODE, "D1", seq_len),
-            (SOFTMAX_NODE, "D0", 1),
-        ],
-        CONTEXT_NODE: [
-            (CONTEXT_NODE, "D1", seq_len),
-            (CONTEXT_NODE, "D2", d_head),
-            (CONTEXT_NODE, "D0", QUERY_TILE),
-        ],
-    }
+    """The fused groups, each tiling only the dimensions it actually iterates.
+
+    A dimension a core already holds whole is left out: the loop would run once and
+    still cost a reuse variable, and a tensor gets one.
+    """
+    rows = array().num_rows
     return [
         FusedGroup(
             f"Fused_Group_{index + 1}",
             layers,
-            [entry for layer in layers for entry in tiling[layer]],
+            [
+                (layer, dim, tile)
+                for layer in layers
+                for dim, tile, extent in _layer_tiling(layer, seq_len, d_head, rows)
+                if tile < extent
+            ],
         )
         for index, layers in enumerate(GROUP_LAYERS[k])
     ]
