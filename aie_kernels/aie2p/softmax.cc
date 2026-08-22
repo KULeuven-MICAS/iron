@@ -192,4 +192,16 @@ void mask_bf16(bfloat16 *inout, const int32 unmasked_size, const int32 total_siz
     }
 }
 
+void softmax_rows_causal_bf16(bfloat16 *restrict input,
+                              bfloat16 *restrict output,
+                              const int32_t rows,
+                              const int32_t row_len,
+                              const int32_t row_offset)
+{
+    for (int32_t r = 0; r < rows; r++) {
+        mask_bf16(input + r * row_len, row_offset + r + 1, row_len);
+        softmax_simple_bf16(input + r * row_len, output + r * row_len, row_len);
+    }
+}
+
 } // extern "C"
