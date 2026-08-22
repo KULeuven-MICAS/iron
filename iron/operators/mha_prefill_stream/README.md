@@ -10,7 +10,7 @@ It covers the part of prefill attention that `iron/applications/llama_3.2_1b` st
 on the host; the projections around it stay on IRON's own GEMM.
 
 ```python
-op = MHAPrefillStream(seq_len=256, d_head=64, heads=2, context=ctx)
+op = MHAPrefillStream(seq_len=256, d_head=64, heads=2, context=ctx)  # flash=True to block the key
 op.compile()
 run = op.get_callable()
 run.get_buffer("q").torch_view()[:] = q.flatten()      # already scaled by 1/sqrt(d_head)
@@ -64,6 +64,35 @@ triangular iteration space, no shrinking loop bounds -- so the mask costs the wr
 makes and saves no work. The kernel is handed the tile's global first row, which the
 stream-dse binding builds from the core's spatial index and the loop over the query.
 
+## Blocking the key
+
+`flash=True` runs the softmax **online**: the key is cut into blocks of 64, and each
+block is normalized against a running row maximum and sum instead of against the whole
+row. The context then accumulates over the key exactly the way a GEMM's output
+accumulates over its contraction, so nothing in the workload reduces nonlinearly and the
+key is an ordinary blockable dimension. Masking is inside these kernels, so flash is
+always causal.
+
+The three layers still take a row each of four columns, but every tile is now 64x64: the
+score GEMM writes one block, the online softmax normalizes it, and the context GEMM
+folds it into the block of the output it holds resident across the whole key loop. What
+crosses between the second row and the third is the running scale --
+`[m_{i-1} | m_i | l_i | exp2(m_{i-1} - m_i)]`, four rows of 64 -- as a **depth-one object
+fifo**, which between neighbouring cores is one shared buffer and a pair of locks: no DMA
+channel, no copy, and at depth one the producer cannot run into the next key block before
+the consumer is done with this one, which is what makes it state rather than a message.
+
+The two halves cannot share a core, which is why the scale has to cross at all. The
+probability block leaves the softmax row major and reaches the matmul in the MAC tiling,
+and only a DMA re-lays it out; a compute tile has two input DMA channels, and the third
+row spends both on that block and on the value.
+
+| | resident key | `flash=True` |
+|---|---|---|
+| score / softmax / context tile | 16x256 / 16x256 / 16x64 | 64x64 throughout |
+| key | whole row, resident | blocks of 64, streamed |
+| `seq_len` | 256 | 8192 measured |
+
 ## Limits, measured
 
 - **The query dimension is the only one a core may split**: the head dimension is the score
@@ -74,11 +103,18 @@ stream-dse binding builds from the core's spatial index and the loop over the qu
   compute: at eight columns one head takes 318 us against 244 us at four. Two columns is
   faster below three heads and slower above them.
 - **Sequence length is bounded by memory-tile capacity.** Key and value stay whole, so
-  `2 * seq_len * d_head * 2` bytes must fit a 256 KB memory tile: `seq_len = 256` is
-  comfortable and `2048` is infeasible. `_check_shapes` rejects the rest up front.
+  `2 * seq_len * d_head * 2` bytes must fit a 256 KB memory tile, and the fused score
+  core has to hold the whole key beside its own tiles, which caps it at 320 positions.
+  `_check_shapes` rejects the rest up front.
 
-Blocking the key dimension (flash attention) is what lifts these: it makes the key axis
-splittable, which unlocks more columns, and it removes the whole-K/V residency bound.
+`flash=True` removes the last of these; it does not move the first two, since the query
+is still the only dimension a core may split. Its own limits are that `d_head` must be 64
+and `seq_len` a multiple of 256 -- `mha.cc` reuses the score GEMM's compiled block for
+the value matmul and spells 64-element strides into its rescaling loops, and a query
+block shorter than the kernel's would read a scale row the per-block reset leaves stale.
+Past `seq_len = 8192` the runtime sequence needs an outermost wrap of 64 on the query
+transfer, one more than a shim buffer descriptor's six-bit iteration field holds, and
+stream-dse's `StrideSet.legalize` loops rather than splitting it.
 
 ## Numbers
 
@@ -95,3 +131,18 @@ At `seq_len=256, d_head=64` on Strix, against the golden at the tolerance
 
 `k=1` costs about 35 us per further head against `k=3`'s 283: what a group boundary buys
 back is a configure and a DDR round trip of the score and probability matrices per head.
+
+Blocked, against `iron/operators/mha` at the same sequence length, the same 64x64 block
+and the same twelve cores (`num_of_pipelines=4`), one head, largest deviation from the
+golden in the right-hand column:
+
+| `seq_len` | 256 | 512 | 1024 | 2048 | 4096 | 8192 | deviation |
+|---|---|---|---|---|---|---|---|
+| `iron/operators/mha` | 123 us | 238 us | 630 us | 1837 us | 6430 us | 23579 us | |
+| `flash=True` | 321 us | 480 us | 1018 us | 3054 us | 10645 us | 40257 us | 5.7e-2 |
+
+A little under twice the hand-written design, steady across the range. Both skip the same
+masked-out blocks inside the kernels and move the same DMA traffic; what the generated
+design spends on top is a memory-tile hop for the score block and one for the probability
+block, where the hand-written one hops once, and a depth-one scale fifo where it pipelines
+a copy at depth two.

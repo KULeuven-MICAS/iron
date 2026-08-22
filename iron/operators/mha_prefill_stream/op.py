@@ -73,9 +73,9 @@ class _MHAStreamGroup(MLIROperator):
         # Both halves of an online-softmax step are entry points of the same object.
         per_layer = {
             design.SCORES_NODE: (GEMM, tiles[design.SCORES_NODE]),
-            design.CONTEXT_NODE: (FLASH, None)
-            if self.flash
-            else (GEMM, tiles[design.CONTEXT_NODE]),
+            design.CONTEXT_NODE: (
+                (FLASH, None) if self.flash else (GEMM, tiles[design.CONTEXT_NODE])
+            ),
             design.SOFTMAX_NODE: (FLASH if self.flash else SOFTMAX, None),
         }
         layers = design.GROUP_LAYERS[self.k][self.group_index]

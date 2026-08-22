@@ -22,10 +22,13 @@ from stream.compiler.kernels import AIEKernels  # noqa: E402
 
 from iron.common.stream.ops import (  # noqa: E402
     ELTWISE_MUL,
+    FLASH,
+    FLASH_TILE,
     GEMM,
     SILU,
     SOFTMAX,
     elementwise_layouts,
+    flash_layouts,
     gemm_layouts,
     softmax_layouts,
 )
@@ -70,6 +73,15 @@ def test_softmax_layouts_match_stream(n):
     )
 
 
-@pytest.mark.parametrize("kernel", [GEMM, SILU, ELTWISE_MUL, SOFTMAX])
+def test_flash_layouts_match_stream():
+    _assert_same(
+        flash_layouts(),
+        AIEKernels[FLASH.key](
+            50.0, n=FLASH_TILE, layout="contiguous", m=FLASH_TILE, bfp16_mmul=True
+        ),
+    )
+
+
+@pytest.mark.parametrize("kernel", [GEMM, SILU, ELTWISE_MUL, SOFTMAX, FLASH])
 def test_kernel_keys_exist_in_stream(kernel):
     assert kernel.key in AIEKernels

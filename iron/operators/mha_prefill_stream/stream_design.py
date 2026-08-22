@@ -220,7 +220,8 @@ def _placements(seq_len, d_head, k, causal, flash=False):
         kwargs = {
             SCORES_NODE: gemm(*tiles[SCORES_NODE]),
             SOFTMAX_NODE: softmax,
-            CONTEXT_NODE: gemm(*tiles[CONTEXT_NODE]) | ({"flash": True} if flash else {}),
+            CONTEXT_NODE: gemm(*tiles[CONTEXT_NODE])
+            | ({"flash": True} if flash else {}),
         }
         return {
             layer: Placement(
