@@ -32,9 +32,11 @@ HEADS = [1, 2]
 # Fused groups to deploy the core as: one design, or one per layer.
 FUSION_GROUPS = [1, 3]
 
-# Sequence lengths the blocked-key design is checked at: one query block per core, and
-# two, which is what puts a query loop around the key loop.
-FLASH_SEQ_LENS = [SEQ_LEN, 2 * SEQ_LEN]
+# Sequence lengths the blocked-key design is checked at, with the heads it replays the
+# design over: one query block per core, and two, which is what puts a query loop around
+# the key loop. Several heads accumulate over a longer running scale and land closer to
+# the tolerance than one does, so the margin is watched at two as well.
+FLASH_CASES = [(SEQ_LEN, 1), (2 * SEQ_LEN, 1), (SEQ_LEN, 2)]
 
 # Timed dispatches per test; the reported latency is the fastest of them.
 TIMED_RUNS = 3
@@ -92,20 +94,20 @@ def test_mha_prefill_stream(heads, k, causal, aie_context):
 
 
 @pytest.mark.supported_devices("npu2")
-@pytest.mark.parametrize("seq_len", FLASH_SEQ_LENS)
-def test_mha_prefill_stream_flash(seq_len, aie_context):
+@pytest.mark.parametrize("seq_len, heads", FLASH_CASES)
+def test_mha_prefill_stream_flash(seq_len, heads, aie_context):
     """Blocking the key is what lifts the sequence length, so this runs past what the
     resident-key design can reach. Masking is inside the kernels, so it is always causal.
     """
-    golden_ref = generate_golden_reference(seq_len, D_HEAD, causal=True)
+    golden_ref = generate_golden_reference(seq_len, D_HEAD, heads=heads, causal=True)
     operator = MHAPrefillStream(
-        seq_len=seq_len, d_head=D_HEAD, flash=True, context=aie_context
+        seq_len=seq_len, d_head=D_HEAD, heads=heads, flash=True, context=aie_context
     )
     operator.compile()
 
     run = _staged(operator, golden_ref)
     run()
-    output = run.get_buffer("output").to_torch().reshape((1, seq_len, D_HEAD))
+    output = run.get_buffer("output").to_torch().reshape((heads, seq_len, D_HEAD))
     errors = verify_buffer(
         output, "output", golden_ref[CONTEXT], rel_tol=4e-2, abs_tol=1.5e-1
     )
