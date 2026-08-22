@@ -271,6 +271,15 @@ def _layer_tiling(layer, seq_len, d_head, k, flash=False):
     ]
 
 
+def _nesting(dims, flash):
+    """The dimensions in the order the group declares them, which is innermost first.
+
+    Blocked, the key has to be the inner loop: one running scale and one context block
+    belong to one query block, so that query block has to finish before the next starts.
+    """
+    return dims[::-1] if flash else dims
+
+
 def _groups(seq_len, d_head, k, flash=False):
     """The fused groups, each tiling only the dimensions it actually iterates.
 
@@ -284,7 +293,9 @@ def _groups(seq_len, d_head, k, flash=False):
             [
                 (layer, dim, tile)
                 for layer in layers
-                for dim, tile, extent in _layer_tiling(layer, seq_len, d_head, k, flash)
+                for dim, tile, extent in _nesting(
+                    _layer_tiling(layer, seq_len, d_head, k, flash), flash
+                )
                 if tile < extent
             ],
         )
