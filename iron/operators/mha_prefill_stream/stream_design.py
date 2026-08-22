@@ -174,7 +174,7 @@ def kernel_tiles(seq_len, d_head, k):
     }
 
 
-def _placements(seq_len, d_head, k):
+def _placements(seq_len, d_head, k, causal):
     """Where each layer runs.
 
     Fused, the three layers run at once and take a row each of the same columns, splitting
@@ -201,6 +201,10 @@ def _placements(seq_len, d_head, k):
         layout="contiguous",
         bfp16_mmul=True,
     )
+    if causal:
+        # Masking is the softmax's own business here: the whole key row is resident, so a
+        # query attends a suffix of it and the kernel drops that suffix before it reduces.
+        softmax["causal"] = True
     if k == 1:
         columns = grid.all_columns[:FUSED_COLUMNS]
         kwargs = {
@@ -325,7 +329,7 @@ def workload_for(seq_len, d_head):
     )
 
 
-def build_inputs(seq_len, d_head, output_dir, k=LAYER_BY_LAYER):
+def build_inputs(seq_len, d_head, output_dir, k=LAYER_BY_LAYER, causal=False):
     """Write the workload and mapping for one configuration; return their paths."""
     _check_shapes(seq_len, d_head, k)
     workload = workload_for(seq_len, d_head)
@@ -334,7 +338,7 @@ def build_inputs(seq_len, d_head, output_dir, k=LAYER_BY_LAYER):
         workload.write(output_dir / "workload.onnx"),
         emit_mapping(
             workload,
-            _placements(seq_len, d_head, k),
+            _placements(seq_len, d_head, k, causal),
             _groups(seq_len, d_head, k),
             array(),
             output_dir / "mapping.yaml",
@@ -342,10 +346,12 @@ def build_inputs(seq_len, d_head, output_dir, k=LAYER_BY_LAYER):
     )
 
 
-def _experiment_id(seq_len, d_head, k):
+def _experiment_id(seq_len, d_head, k, causal):
     grid = array()
     hardware = os.path.splitext(os.path.basename(ACCELERATOR))[0]
     suffix = f"_k{k}" if k != LAYER_BY_LAYER else ""
+    if causal:
+        suffix += "_causal"
     if trace_size():
         suffix += "_traced"
     return (
@@ -354,11 +360,11 @@ def _experiment_id(seq_len, d_head, k):
     )
 
 
-def _run_codegen(seq_len, d_head, npu, k):
+def _run_codegen(seq_len, d_head, npu, k, causal):
     """Run stream-dse's constraint optimization and code generation once."""
-    experiment_id = _experiment_id(seq_len, d_head, k)
+    experiment_id = _experiment_id(seq_len, d_head, k, causal)
     workload_path, mapping_path = build_inputs(
-        seq_len, d_head, os.path.join(OUTPUT_ROOT, experiment_id), k=k
+        seq_len, d_head, os.path.join(OUTPUT_ROOT, experiment_id), k=k, causal=causal
     )
     optimize_allocation_co(
         hardware=ACCELERATOR,
@@ -378,18 +384,18 @@ def _run_codegen(seq_len, d_head, npu, k):
     )
 
 
-def _design_paths(seq_len, d_head, k):
+def _design_paths(seq_len, d_head, k, causal=False):
     return design_paths(
-        os.path.join(OUTPUT_ROOT, _experiment_id(seq_len, d_head, k)),
+        os.path.join(OUTPUT_ROOT, _experiment_id(seq_len, d_head, k, causal)),
         len(GROUP_LAYERS[k]),
     )
 
 
-def _group_text(group_index, *, k, seq_len, d_head, npu) -> str:
+def _group_text(group_index, *, k, seq_len, d_head, npu, causal) -> str:
     return group_text(
         group_index,
-        _design_paths(seq_len, d_head, k),
-        lambda: _run_codegen(seq_len, d_head, npu, k),
+        _design_paths(seq_len, d_head, k, causal),
+        lambda: _run_codegen(seq_len, d_head, npu, k, causal),
     )
 
 

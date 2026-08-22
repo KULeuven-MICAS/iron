@@ -54,6 +54,16 @@ DDR and back, which costs a full configure and round trip per layer per head.
 | cores | 12 (4 columns x 3 rows) | 4 per layer, in turn |
 | score / probability matrix | core -> memory tile -> core | core -> DDR -> core |
 
+## Causal masking
+
+`causal=True` masks every key at a later position than its query, which is what prefill
+computes. The whole key row is resident on the core that reduces it, so a query attends a
+prefix of that row: the softmax kernel writes `-inf` over the suffix past the query's own
+position, then normalizes the row as before. Nothing else in the design moves -- no
+triangular iteration space, no shrinking loop bounds -- so the mask costs the writes it
+makes and saves no work. The kernel is handed the tile's global first row, which the
+stream-dse binding builds from the core's spatial index and the loop over the query.
+
 ## Limits, measured
 
 - **The query dimension is the only one a core may split**: the head dimension is the score
@@ -79,7 +89,9 @@ At `seq_len=256, d_head=64` on Strix, against the golden at the tolerance
 | heads | 1 | 2 | 4 | 8 |
 |---|---|---|---|---|
 | `k=1` | 244 us | 278 us | 346 us | 489 us |
+| `k=1`, causal | 282 us | 354 us | | |
 | `k=3` | 337 us | 621 us | | |
+| `k=3`, causal | 373 us | 635 us | | |
 
 `k=1` costs about 35 us per further head against `k=3`'s 283: what a group boundary buys
 back is a configure and a DDR round trip of the score and probability matrices per head.

@@ -50,12 +50,18 @@ def _staged(operator, golden_ref):
     Latency=r"Latency \(us\): (?P<value>[\d\.]+)",
     Bandwidth=r"Effective Bandwidth: (?P<value>[\d\.e\+-]+) GB/s",
 )
+@pytest.mark.parametrize("causal", [False, True])
 @pytest.mark.parametrize("k", FUSION_GROUPS)
 @pytest.mark.parametrize("heads", HEADS)
-def test_mha_prefill_stream(heads, k, aie_context):
-    golden_ref = generate_golden_reference(SEQ_LEN, D_HEAD, heads=heads)
+def test_mha_prefill_stream(heads, k, causal, aie_context):
+    golden_ref = generate_golden_reference(SEQ_LEN, D_HEAD, heads=heads, causal=causal)
     operator = MHAPrefillStream(
-        seq_len=SEQ_LEN, d_head=D_HEAD, heads=heads, k=k, context=aie_context
+        seq_len=SEQ_LEN,
+        d_head=D_HEAD,
+        heads=heads,
+        k=k,
+        causal=causal,
+        context=aie_context,
     )
     operator.compile()
 

@@ -33,6 +33,7 @@ class _MHAStreamGroup(MLIROperator):
     d_head: int
     k: int
     group_index: int
+    causal: bool = False
     context: Any = field(default=None, repr=False, compare=False)
 
     def __post_init__(self):
@@ -49,6 +50,7 @@ class _MHAStreamGroup(MLIROperator):
             "k": self.k,
             "seq_len": self.seq_len,
             "d_head": self.d_head,
+            "causal": self.causal,
             "npu": aie_utils.get_current_device().resolve().name,
         }
 
@@ -88,11 +90,16 @@ class _MHAStreamGroup(MLIROperator):
         the next of the group's inputs as its second operand, which is the order
         :func:`group_ports` hands them in.
         """
+        from iron.operators.mha_prefill_stream.reference import causal_mask
+
         design = self._design
         value, operands = inputs[0], iter(inputs[1:])
         for layer in design.GROUP_LAYERS[self.k][self.group_index]:
             if layer == design.SOFTMAX_NODE:
-                value = torch.softmax(value.float(), dim=-1).to(value.dtype)
+                scores = value.float()
+                if self.causal:
+                    scores = scores + causal_mask(*scores.shape[-2:], scores.dtype)
+                value = torch.softmax(scores, dim=-1).to(value.dtype)
             else:
                 value = value @ next(operands)
         return value
@@ -120,6 +127,10 @@ class MHAPrefillStream(OperatorSequence):
     and one head therefore occupies a fixed patch of the array. The projections around
     the core stay on IRON's own GEMM.
 
+    ``causal`` masks every key at a later position than its query, which is what
+    prefill computes; the mask lives in the softmax kernel, since the whole key row is
+    resident on the core that reduces it.
+
     The caller hands in a ``q`` already scaled by ``1/sqrt(d_head)`` and a ``k_t``
     already transposed; see
     :mod:`~iron.operators.mha_prefill_stream.reference`. Runtime buffers are named by
@@ -133,6 +144,7 @@ class MHAPrefillStream(OperatorSequence):
         d_head,
         heads=1,
         k=None,
+        causal=False,
         context=None,
         share_designs=True,
         dispatch="auto",
@@ -153,6 +165,7 @@ class MHAPrefillStream(OperatorSequence):
                 d_head=d_head,
                 k=k,
                 group_index=index,
+                causal=causal,
                 context=context,
             )
             for index in range(len(ports))
@@ -167,7 +180,10 @@ class MHAPrefillStream(OperatorSequence):
                     (group, *(n + window if n in per_head else n for n in names))
                 )
         super().__init__(
-            name=f"mha_prefill_stream_k{k}_h{heads}_s{seq_len}_d{d_head}",
+            name=(
+                f"mha_prefill_stream_k{k}_h{heads}_s{seq_len}_d{d_head}"
+                f"{'_causal' if causal else ''}"
+            ),
             runlist=runlist,
             input_args=["q", "k_t", "v"],
             output_args=["output"],

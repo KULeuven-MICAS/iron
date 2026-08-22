@@ -51,13 +51,13 @@ class AttentionCore(nn.Module):
     def forward(self, q, k_t, v):
         scores = q @ k_t
         if self.causal:
-            scores = scores + _causal_mask(
+            scores = scores + causal_mask(
                 scores.shape[-2], scores.shape[-1], scores.dtype
             )
         return torch.softmax(scores, dim=-1) @ v
 
 
-def _causal_mask(seq_q: int, seq_k: int, dtype) -> torch.Tensor:
+def causal_mask(seq_q: int, seq_k: int, dtype) -> torch.Tensor:
     """Additive mask: 0 where a query may attend, -inf where it may not."""
     keep = torch.ones(seq_q, seq_k, dtype=torch.bool).tril()
     return torch.where(keep, 0.0, float("-inf")).to(dtype)
