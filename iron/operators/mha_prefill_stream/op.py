@@ -15,7 +15,7 @@ from iron.common import (
 )
 from iron.common.device_utils import get_kernel_dir
 from iron.common.sequence import OperatorSequence
-from iron.common.stream.ops import GEMM, SOFTMAX
+from iron.common.stream.ops import FLASH, GEMM, SOFTMAX
 
 BYTES_PER_ELEMENT = 2  # every buffer in a fused sequence is addressed as bfloat16
 
@@ -34,6 +34,7 @@ class _MHAStreamGroup(MLIROperator):
     k: int
     group_index: int
     causal: bool = False
+    flash: bool = False
     context: Any = field(default=None, repr=False, compare=False)
 
     def __post_init__(self):
@@ -51,6 +52,7 @@ class _MHAStreamGroup(MLIROperator):
             "seq_len": self.seq_len,
             "d_head": self.d_head,
             "causal": self.causal,
+            "flash": self.flash,
             "npu": aie_utils.get_current_device().resolve().name,
         }
 
@@ -67,11 +69,14 @@ class _MHAStreamGroup(MLIROperator):
 
     def get_kernel_artifacts(self):
         design = self._design
-        tiles = design.kernel_tiles(self.seq_len, self.d_head, self.k)
+        tiles = design.kernel_tiles(self.seq_len, self.d_head, self.k, self.flash)
+        # Both halves of an online-softmax step are entry points of the same object.
         per_layer = {
             design.SCORES_NODE: (GEMM, tiles[design.SCORES_NODE]),
-            design.CONTEXT_NODE: (GEMM, tiles[design.CONTEXT_NODE]),
-            design.SOFTMAX_NODE: (SOFTMAX, None),
+            design.CONTEXT_NODE: (FLASH, None)
+            if self.flash
+            else (GEMM, tiles[design.CONTEXT_NODE]),
+            design.SOFTMAX_NODE: (FLASH if self.flash else SOFTMAX, None),
         }
         layers = design.GROUP_LAYERS[self.k][self.group_index]
         base_dir, kernel_dir = self.context.base_dir, get_kernel_dir()
@@ -131,6 +136,12 @@ class MHAPrefillStream(OperatorSequence):
     prefill computes; the mask lives in the softmax kernel, since the whole key row is
     resident on the core that reduces it.
 
+    ``flash`` blocks the key instead of keeping it resident: the softmax runs online,
+    one key block at a time, so the context accumulates over the key the way a GEMM's
+    output accumulates over its contraction. Masking is inside those kernels, so flash
+    is always causal, and the sequence length is no longer bounded by what a core or a
+    memory tile can hold.
+
     The caller hands in a ``q`` already scaled by ``1/sqrt(d_head)`` and a ``k_t``
     already transposed; see
     :mod:`~iron.operators.mha_prefill_stream.reference`. Runtime buffers are named by
@@ -145,6 +156,7 @@ class MHAPrefillStream(OperatorSequence):
         heads=1,
         k=None,
         causal=False,
+        flash=False,
         context=None,
         share_designs=True,
         dispatch="auto",
@@ -155,7 +167,8 @@ class MHAPrefillStream(OperatorSequence):
             trace_size,
         )
 
-        k = LAYER_BY_LAYER if k is None else k
+        k = (1 if flash else LAYER_BY_LAYER) if k is None else k
+        causal = causal or flash
         ports = [
             inputs + outputs for inputs, outputs in group_ports(seq_len, d_head, k)
         ]
@@ -166,6 +179,7 @@ class MHAPrefillStream(OperatorSequence):
                 k=k,
                 group_index=index,
                 causal=causal,
+                flash=flash,
                 context=context,
             )
             for index in range(len(ports))
@@ -182,7 +196,7 @@ class MHAPrefillStream(OperatorSequence):
         super().__init__(
             name=(
                 f"mha_prefill_stream_k{k}_h{heads}_s{seq_len}_d{d_head}"
-                f"{'_causal' if causal else ''}"
+                f"{'_flash' if flash else '_causal' if causal else ''}"
             ),
             runlist=runlist,
             input_args=["q", "k_t", "v"],

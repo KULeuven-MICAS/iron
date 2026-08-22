@@ -42,14 +42,26 @@ class AttentionCore(nn.Module):
 
     ``causal`` masks every key at a later position than its query, which is what prefill
     computes; the mask is additive so it survives the export as an ordinary operand.
+
+    ``flash`` writes the same computation as one online-softmax step per key block. The
+    mask, the running maximum and sum, and the final normalisation are all inside that
+    step, so the graph loses both the mask operand and the reduction over the key -- and
+    with it the reason the key had to stay resident. It is the shape the design is
+    generated from, not the one the golden output is taken from: run this and the
+    probabilities come out unnormalised, exactly as they leave the kernel.
     """
 
-    def __init__(self, causal: bool = False):
+    def __init__(self, causal: bool = False, flash: bool = False):
         super().__init__()
         self.causal = causal
+        self.flash = flash
 
     def forward(self, q, k_t, v):
         scores = q @ k_t
+        if self.flash:
+            import iron.common.stream.ops  # noqa: F401  (registers the operator)
+
+            return torch.ops.iron_stream.partial_softmax(scores) @ v
         if self.causal:
             scores = scores + causal_mask(
                 scores.shape[-2], scores.shape[-1], scores.dtype
@@ -63,10 +75,10 @@ def causal_mask(seq_q: int, seq_k: int, dtype) -> torch.Tensor:
     return torch.where(keep, 0.0, float("-inf")).to(dtype)
 
 
-def attention_core_module(causal: bool = False) -> AttentionCore:
+def attention_core_module(causal: bool = False, flash: bool = False) -> AttentionCore:
     """The module the design is exported from. It holds no parameters: every operand
     is an activation the sequence hands in."""
-    return AttentionCore(causal).eval()
+    return AttentionCore(causal, flash).eval()
 
 
 def query_scale(d_head: int) -> float:

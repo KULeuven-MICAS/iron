@@ -83,8 +83,13 @@ COLUMNS_IN_USE = 8
 # fused with the softmax may not.
 _KEY_BLOCK = 64
 
+# The one block mha.cc's flash kernels are written for: query, key and head all 64.
+FLASH_BLOCK = 64
 
-def key_tile(seq_len, k):
+
+def key_tile(seq_len, k, flash=False):
+    if flash:
+        return FLASH_BLOCK
     return seq_len if k == 1 else _KEY_BLOCK
 
 
@@ -130,21 +135,24 @@ def query_per_core(seq_len, k):
     return seq_len // query_split(k)
 
 
-def query_tile(seq_len, k):
+def query_tile(seq_len, k, flash=False):
     """Query positions one core works at a time. Split off, a core takes its whole slice
     at once: a second temporal loop beside the key one would put two variables in a reuse
     window, which the object-fifo lowering does not express. Fused, the key and the value
-    are resident beside the tile, so the query is what iterates instead."""
+    are resident beside the tile, so the query is what iterates instead. Blocked, the
+    kernels fix the block and both the query and the key iterate."""
+    if flash:
+        return FLASH_BLOCK
     return FUSED_QUERY_TILE if k == 1 else query_per_core(seq_len, k)
 
 
-def _softmax_rows(seq_len, k):
+def _softmax_rows(seq_len, k, flash=False):
     """Query rows one softmax call normalizes. Fused, the group's layers share one query
     tile and the kernel loops the rows of it; split off, the tile is a single row."""
-    return query_tile(seq_len, k) if k == 1 else 1
+    return query_tile(seq_len, k, flash) if k == 1 else 1
 
 
-def _scores_tile(seq_len, d_head, k):
+def _scores_tile(seq_len, d_head, k, flash=False):
     """The score GEMM's (m, k, n).
 
     Exactly one dimension may iterate, since a tensor gets one reuse variable. Fused, the
@@ -153,6 +161,8 @@ def _scores_tile(seq_len, d_head, k):
     the contraction: streaming the query instead is expressible and builds, but the second
     block onwards comes back wrong.
     """
+    if flash:
+        return FLASH_BLOCK, d_head, FLASH_BLOCK
     query, key = query_tile(seq_len, k), seq_len // GEMM_COLUMNS
     if k == 1:
         return query, d_head, seq_len
@@ -161,20 +171,20 @@ def _scores_tile(seq_len, d_head, k):
     return query, d_head // 2, key
 
 
-def kernel_tiles(seq_len, d_head, k):
+def kernel_tiles(seq_len, d_head, k, flash=False):
     """Each GEMM layer's kernel tile, in the (m, k, n) order the kernel takes. The
     kernel tile and the intra-core tile are the same tile, so they are declared once."""
     return {
-        SCORES_NODE: _scores_tile(seq_len, d_head, k),
+        SCORES_NODE: _scores_tile(seq_len, d_head, k, flash),
         CONTEXT_NODE: (
-            query_tile(seq_len, k),
-            key_tile(seq_len, k),
+            query_tile(seq_len, k, flash),
+            key_tile(seq_len, k, flash),
             d_head // _context_columns(d_head),
         ),
     }
 
 
-def _placements(seq_len, d_head, k, causal):
+def _placements(seq_len, d_head, k, causal, flash=False):
     """Where each layer runs.
 
     Fused, the three layers run at once and take a row each of the same columns, splitting
@@ -184,7 +194,7 @@ def _placements(seq_len, d_head, k, causal):
     not divide.
     """
     grid = array()
-    tiles = kernel_tiles(seq_len, d_head, k)
+    tiles = kernel_tiles(seq_len, d_head, k, flash)
 
     def split(cols):
         """Rows always, columns only when there is more than one to split over."""
@@ -195,13 +205,13 @@ def _placements(seq_len, d_head, k, causal):
     )
     # A row at a time, over the MAC tile bounds of the GEMMs either side of it.
     softmax = dict(
-        m=_softmax_rows(seq_len, k),
-        n=seq_len,
+        m=_softmax_rows(seq_len, k, flash),
+        n=FLASH_BLOCK if flash else seq_len,
         utilization=50.0,
         layout="contiguous",
         bfp16_mmul=True,
     )
-    if causal:
+    if causal and not flash:
         # Masking is the softmax's own business here: the whole key row is resident, so a
         # query attends a suffix of it and the kernel drops that suffix before it reduces.
         softmax["causal"] = True
@@ -210,7 +220,7 @@ def _placements(seq_len, d_head, k, causal):
         kwargs = {
             SCORES_NODE: gemm(*tiles[SCORES_NODE]),
             SOFTMAX_NODE: softmax,
-            CONTEXT_NODE: gemm(*tiles[CONTEXT_NODE]),
+            CONTEXT_NODE: gemm(*tiles[CONTEXT_NODE]) | ({"flash": True} if flash else {}),
         }
         return {
             layer: Placement(
@@ -238,27 +248,30 @@ def _placements(seq_len, d_head, k, causal):
     }
 
 
-def _layer_tiling(layer, seq_len, d_head, k):
+def _layer_tiling(layer, seq_len, d_head, k, flash=False):
     """Each of the layer's dimensions, as (dim, tile, the extent one core holds)."""
     query = query_per_core(seq_len, k)
     if layer == SCORES_NODE:
-        rows, contraction, key = _scores_tile(seq_len, d_head, k)
+        rows, contraction, key = _scores_tile(seq_len, d_head, k, flash)
         return [
             ("D0", rows, query),
             ("D1", contraction, d_head),
             ("D2", key, seq_len // GEMM_COLUMNS),
         ]
     if layer == SOFTMAX_NODE:
-        return [("D0", _softmax_rows(seq_len, k), query), ("D1", seq_len, seq_len)]
+        return [
+            ("D0", _softmax_rows(seq_len, k, flash), query),
+            ("D1", FLASH_BLOCK if flash else seq_len, seq_len),
+        ]
     head = d_head // _context_columns(d_head)
     return [
-        ("D0", query_tile(seq_len, k), query),
-        ("D1", key_tile(seq_len, k), seq_len),
+        ("D0", query_tile(seq_len, k, flash), query),
+        ("D1", key_tile(seq_len, k, flash), seq_len),
         ("D2", head, head),
     ]
 
 
-def _groups(seq_len, d_head, k):
+def _groups(seq_len, d_head, k, flash=False):
     """The fused groups, each tiling only the dimensions it actually iterates.
 
     A dimension a core already holds whole is left out: the loop would run once and
@@ -271,7 +284,7 @@ def _groups(seq_len, d_head, k):
             [
                 (layer, dim, tile)
                 for layer in layers
-                for dim, tile, extent in _layer_tiling(layer, seq_len, d_head, k)
+                for dim, tile, extent in _layer_tiling(layer, seq_len, d_head, k, flash)
                 if tile < extent
             ],
         )
@@ -279,7 +292,24 @@ def _groups(seq_len, d_head, k):
     ]
 
 
-def _check_shapes(seq_len, d_head, k):
+def _check_shapes(seq_len, d_head, k, flash=False):
+    if flash:
+        if k != 1:
+            raise ValueError("flash attention is generated as one fused group, so k=1")
+        if d_head != FLASH_BLOCK:
+            raise ValueError(
+                f"mha.cc's flash kernels reuse the score GEMM's compiled block, which "
+                f"holds only when d_head is {FLASH_BLOCK}, not {d_head}"
+            )
+        if seq_len % (FLASH_BLOCK * FUSED_COLUMNS):
+            # A query block shorter than the kernel's would read a scale row the
+            # per-block reset does not clear.
+            raise ValueError(
+                f"seq_len {seq_len} must be a multiple of {FLASH_BLOCK * FUSED_COLUMNS}: "
+                f"the query splits over {FUSED_COLUMNS} columns in whole blocks of "
+                f"{FLASH_BLOCK}"
+            )
+        return
     for name, extent, split in (
         ("query", seq_len, query_split(k)),
         ("key", seq_len, GEMM_COLUMNS),
@@ -318,39 +348,43 @@ def _check_shapes(seq_len, d_head, k):
 
 
 @lru_cache(maxsize=None)
-def workload_for(seq_len, d_head):
+def workload_for(seq_len, d_head, flash=False):
     """The exported workload for one problem size."""
     zeros = lambda *shape: torch.zeros(shape, dtype=torch.bfloat16)  # noqa: E731
     return export_workload(
-        attention_core_module(),
+        attention_core_module(flash=flash),
         (zeros(seq_len, d_head), zeros(d_head, seq_len), zeros(seq_len, d_head)),
         node_names=NODE_NAMES,
         result_names=RESULT_NAMES,
     )
 
 
-def build_inputs(seq_len, d_head, output_dir, k=LAYER_BY_LAYER, causal=False):
+def build_inputs(
+    seq_len, d_head, output_dir, k=LAYER_BY_LAYER, causal=False, flash=False
+):
     """Write the workload and mapping for one configuration; return their paths."""
-    _check_shapes(seq_len, d_head, k)
-    workload = workload_for(seq_len, d_head)
+    _check_shapes(seq_len, d_head, k, flash)
+    workload = workload_for(seq_len, d_head, flash)
     output_dir = Path(output_dir)
     return (
         workload.write(output_dir / "workload.onnx"),
         emit_mapping(
             workload,
-            _placements(seq_len, d_head, k, causal),
-            _groups(seq_len, d_head, k),
+            _placements(seq_len, d_head, k, causal, flash),
+            _groups(seq_len, d_head, k, flash),
             array(),
             output_dir / "mapping.yaml",
         ),
     )
 
 
-def _experiment_id(seq_len, d_head, k, causal):
+def _experiment_id(seq_len, d_head, k, causal, flash):
     grid = array()
     hardware = os.path.splitext(os.path.basename(ACCELERATOR))[0]
     suffix = f"_k{k}" if k != LAYER_BY_LAYER else ""
-    if causal:
+    if flash:
+        suffix += "_flash"
+    elif causal:
         suffix += "_causal"
     if trace_size():
         suffix += "_traced"
@@ -360,11 +394,16 @@ def _experiment_id(seq_len, d_head, k, causal):
     )
 
 
-def _run_codegen(seq_len, d_head, npu, k, causal):
+def _run_codegen(seq_len, d_head, npu, k, causal, flash):
     """Run stream-dse's constraint optimization and code generation once."""
-    experiment_id = _experiment_id(seq_len, d_head, k, causal)
+    experiment_id = _experiment_id(seq_len, d_head, k, causal, flash)
     workload_path, mapping_path = build_inputs(
-        seq_len, d_head, os.path.join(OUTPUT_ROOT, experiment_id), k=k, causal=causal
+        seq_len,
+        d_head,
+        os.path.join(OUTPUT_ROOT, experiment_id),
+        k=k,
+        causal=causal,
+        flash=flash,
     )
     optimize_allocation_co(
         hardware=ACCELERATOR,
@@ -384,18 +423,18 @@ def _run_codegen(seq_len, d_head, npu, k, causal):
     )
 
 
-def _design_paths(seq_len, d_head, k, causal=False):
+def _design_paths(seq_len, d_head, k, causal=False, flash=False):
     return design_paths(
-        os.path.join(OUTPUT_ROOT, _experiment_id(seq_len, d_head, k, causal)),
+        os.path.join(OUTPUT_ROOT, _experiment_id(seq_len, d_head, k, causal, flash)),
         len(GROUP_LAYERS[k]),
     )
 
 
-def _group_text(group_index, *, k, seq_len, d_head, npu, causal) -> str:
+def _group_text(group_index, *, k, seq_len, d_head, npu, causal, flash) -> str:
     return group_text(
         group_index,
-        _design_paths(seq_len, d_head, k, causal),
-        lambda: _run_codegen(seq_len, d_head, npu, k, causal),
+        _design_paths(seq_len, d_head, k, causal, flash),
+        lambda: _run_codegen(seq_len, d_head, npu, k, causal, flash),
     )
 
 

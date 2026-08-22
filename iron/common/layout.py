@@ -107,6 +107,26 @@ def tiled_2d(rows: int, cols: int, row_unit: int, col_unit: int) -> TiledStrided
     )
 
 
+def contiguous_tiled_2d(
+    rows: int, cols: int, row_unit: int, col_unit: int
+) -> TiledStridedLayout:
+    """Row-major, spelled over the ``row_unit x col_unit`` tile bounds.
+
+    The same addresses as :func:`contiguous_2d`, but named at the tile bounds of the
+    GEMM either side of it. A transform between two layouts is read off matching
+    ``(dimension, level)`` pairs, so a kernel that walks its operand linearly between
+    two tiled ones has to spell its layout at their levels for the two to line up.
+    """
+    return TiledStridedLayout(
+        (
+            TiledStride(
+                (Stride(row_unit * cols, rows // row_unit), Stride(cols, row_unit))
+            ),
+            TiledStride((Stride(col_unit, cols // col_unit), Stride(1, col_unit))),
+        )
+    )
+
+
 def contiguous_2d(rows: int, cols: int) -> TiledStridedLayout:
     """Plain row-major layout for a ``rows x cols`` tensor.
 

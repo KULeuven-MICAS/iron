@@ -27,7 +27,12 @@ from onnx import defs
 from onnxscript import opset18
 from onnxscript.values import Op, Opset
 
-from iron.common.layout import TiledStridedLayout, contiguous_2d, tiled_2d
+from iron.common.layout import (
+    TiledStridedLayout,
+    contiguous_2d,
+    contiguous_tiled_2d,
+    tiled_2d,
+)
 
 # Intrinsic MAC tile dimensions of the aie2p kernels stream-dse targets. The
 # operand layouts are the contract the generated DMAs and the compiled kernel
@@ -86,6 +91,48 @@ def softmax_layouts(n: int) -> tuple[TiledStridedLayout, ...]:
     takes no stride, so its tile is a single row and that row has to be contiguous.
     """
     return (contiguous_2d(1, n),) * 2
+
+
+# The one block shape mha.cc's flash kernels are written for.
+FLASH_TILE = 64
+
+
+def flash_layouts() -> tuple[TiledStridedLayout, ...]:
+    """Layouts of the online softmax's score and probability blocks.
+
+    Row major, since the kernel walks a row at a time, but spelled over the MAC tile
+    of the GEMM either side of it so the transform between them lines up.
+    """
+    return (contiguous_tiled_2d(FLASH_TILE, FLASH_TILE, MAC_ROWS_BFP16, T),) * 2
+
+
+def _mha_artifacts(base_dir, kernel_dir):
+    """``mha.cc``'s object: every entry point one online-softmax step calls.
+
+    mha.cc includes mm.cc and softmax.cc, so one translation unit holds the partial
+    softmax, the value accumulation and the rescale, and both cores of a step link
+    against it. Its matmuls are compiled for the 64x64x64 block the kernels hard-code.
+    """
+    from iron.common.compilation import KernelObjectArtifact, SourceArtifact
+
+    return [
+        KernelObjectArtifact(
+            "mha.o",
+            dependencies=[
+                SourceArtifact(base_dir / "aie_kernels" / kernel_dir / f"{name}.cc")
+                for name in ("mha", "mm", "softmax")
+            ],
+            extra_flags=[
+                "-Dbf16_bf16_ONLY",
+                f"-DDIM_M={FLASH_TILE}",
+                f"-DDIM_K={FLASH_TILE}",
+                f"-DDIM_N={FLASH_TILE}",
+                "-DROUND_CONV_EVEN",
+                "-DAIE_API_EMULATE_BFLOAT16_MMUL_WITH_BFP16",
+                "-DB_COL_MAJ",
+            ],
+        )
+    ]
 
 
 def _gemm_artifacts(base_dir, kernel_dir, m: int, k: int, n: int):
@@ -177,7 +224,33 @@ SOFTMAX = StreamKernel(
     key="softmax", layouts=softmax_layouts, source="softmax", only_on="aie2p"
 )
 
+# mha.cc's flash kernels, both halves of an online-softmax step, live in one object.
+FLASH = StreamKernel(
+    key="partial_softmax",
+    layouts=flash_layouts,
+    artifacts=_mha_artifacts,
+    only_on="aie2p",
+)
+
 Silu = custom_op("Silu")
+PartialSoftmax = custom_op("PartialSoftmax")
+
+
+@torch.library.custom_op("iron_stream::partial_softmax", mutates_args=())
+def partial_softmax(x: torch.Tensor) -> torch.Tensor:
+    """One online-softmax step over a key block: exponentials, left unnormalised.
+
+    The running row maximum and sum, the causal mask and the final division are all
+    the kernel's own business, so this is the whole of what the graph says about the
+    step: an elementwise node, whose key axis therefore carries no reduction and is
+    free to be blocked.
+    """
+    return torch.exp(x - x.amax(dim=-1, keepdim=True))
+
+
+@partial_softmax.register_fake
+def _(x: torch.Tensor) -> torch.Tensor:
+    return torch.empty_like(x)
 
 
 def _to_gemm(a, b):
@@ -186,6 +259,10 @@ def _to_gemm(a, b):
 
 def _to_silu(x):
     return Silu(x)
+
+
+def _to_partial_softmax(x):
+    return PartialSoftmax(x)
 
 
 def _to_mul(a, b):
@@ -222,6 +299,9 @@ TORCH_OPS: dict[Callable, StreamOp] = {
     torch.ops.aten.silu.default: StreamOp("Silu", SILU, _to_silu),
     torch.ops.aten.mul.Tensor: StreamOp("Mul", ELTWISE_MUL, _to_mul),
     torch.ops.aten.softmax.int: StreamOp("Softmax", SOFTMAX, _to_softmax),
+    torch.ops.iron_stream.partial_softmax.default: StreamOp(
+        "PartialSoftmax", FLASH, _to_partial_softmax
+    ),
 }
 
 _BY_ONNX_TYPE = {op.onnx_type: op for op in TORCH_OPS.values()}
