@@ -111,7 +111,8 @@ SOFTMAX_CORES = (0, 1, 2, 3)
 
 # The fused design runs its three layers at once, so each takes one row of every column
 # it spans and the query dimension splits over the columns instead of over the rows.
-FUSED_COLUMNS = 4
+# Overridable so a sweep can compare column counts; four is the design's own default.
+FUSED_COLUMNS = int(os.environ.get("IRON_FUSED_COLUMNS", "4"))
 FUSED_ROWS = {SCORES_NODE: (0,), SOFTMAX_NODE: (1,), CONTEXT_NODE: (2,)}
 # Query positions a fused GEMM works at a time. The head's whole key or value sits on the
 # core beside them -- 32 KB of a 64 KB core at seq_len 256 -- so the tile is what is left.
@@ -396,6 +397,10 @@ def _experiment_id(seq_len, d_head, k, causal, flash):
     grid = array()
     hardware = os.path.splitext(os.path.basename(ACCELERATOR))[0]
     suffix = f"_k{k}" if k != LAYER_BY_LAYER else ""
+    # The fused designs split the query over FUSED_COLUMNS and nothing else in the id
+    # records it, so without this a sweep over it is served the first design generated.
+    if k == 1:
+        suffix += f"_c{FUSED_COLUMNS}"
     if flash:
         suffix += "_flash"
     elif causal:
