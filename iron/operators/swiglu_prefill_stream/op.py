@@ -14,6 +14,7 @@ from iron.common import (
 )
 from iron.common.device_utils import get_kernel_dir
 from iron.common.sequence import OperatorSequence
+from iron.common.stream.design import stream_revision
 from iron.common.stream.ops import ELTWISE_MUL, GEMM, SILU
 
 
@@ -45,7 +46,7 @@ class _SwiGLUStreamGroup(MLIROperator):
 
     def get_mlir_artifact(self):
         return PythonGeneratedMLIRArtifact(
-            f"{self.name}.mlir",
+            f"{self.name}_{stream_revision()}.mlir",
             DesignGenerator(
                 self.operator_dir / "stream_design.py",
                 "load_group",

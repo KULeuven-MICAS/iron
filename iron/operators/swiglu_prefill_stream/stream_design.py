@@ -31,6 +31,7 @@ from iron.common.stream.design import (
     digest,
     group_text,
     region_module,
+    stream_revision,
     trace_size,
     trace_tiles,
 )
@@ -287,7 +288,7 @@ def _experiment_id(seq_len, embedding_dim, hidden_dim, k):
         suffix += "_traced"
     return (
         f"{hardware}-swiglu{suffix}_{seq_len}_{embedding_dim}_{hidden_dim}"
-        f"-{grid.num_rows}_row_{grid.num_columns}_col"
+        f"-{grid.num_rows}_row_{grid.num_columns}_col-{stream_revision()}"
     )
 
 

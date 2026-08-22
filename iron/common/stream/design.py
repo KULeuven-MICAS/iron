@@ -12,10 +12,12 @@ that redefines any of these instead of importing them.
 import hashlib
 import os
 import re
+from functools import lru_cache
 from pathlib import Path
 
 __all__ = [
     "prefixed",
+    "stream_revision",
     "region_module",
     "design_paths",
     "group_text",
@@ -23,6 +25,25 @@ __all__ = [
     "trace_size",
     "trace_tiles",
 ]
+
+
+@lru_cache(maxsize=None)
+def stream_revision() -> str:
+    """Token for the installed stream package, which nothing else in the build observes.
+
+    A design is cached under its experiment id and rebuilt from the mtime of its own
+    ``stream_design.py``, so without this a stream-side change is served the design from
+    before it. Mtimes rather than the checkout's commit: an edit that is not committed
+    yet is exactly the case that goes unnoticed.
+    """
+    import stream
+
+    root = Path(stream.__file__).parent
+    stamps = sorted(
+        (str(path.relative_to(root)), path.stat().st_mtime_ns)
+        for path in root.rglob("*.py")
+    )
+    return hashlib.sha256(f"{stream.__version__}{stamps}".encode()).hexdigest()[:8]
 
 
 def prefixed(mlir_text: str, func_prefix: str) -> str:

@@ -29,6 +29,7 @@ from iron.common.stream.design import (
     digest,
     group_text,
     region_module,
+    stream_revision,
     trace_size,
     trace_tiles,
 )
@@ -403,7 +404,7 @@ def _experiment_id(seq_len, d_head, k, causal, flash):
         suffix += "_traced"
     return (
         f"{hardware}-mha{suffix}_{seq_len}_{d_head}"
-        f"-{grid.num_rows}_row_{grid.num_columns}_col"
+        f"-{grid.num_rows}_row_{grid.num_columns}_col-{stream_revision()}"
     )
 
 

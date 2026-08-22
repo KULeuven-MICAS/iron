@@ -15,6 +15,7 @@ from iron.common import (
 )
 from iron.common.device_utils import get_kernel_dir
 from iron.common.sequence import OperatorSequence
+from iron.common.stream.design import stream_revision
 from iron.common.stream.ops import FLASH, GEMM, SOFTMAX
 
 BYTES_PER_ELEMENT = 2  # every buffer in a fused sequence is addressed as bfloat16
@@ -58,7 +59,7 @@ class _MHAStreamGroup(MLIROperator):
 
     def get_mlir_artifact(self):
         return PythonGeneratedMLIRArtifact(
-            f"{self.name}.mlir",
+            f"{self.name}_{stream_revision()}.mlir",
             DesignGenerator(
                 self.operator_dir / "stream_design.py",
                 "load_group",
