@@ -75,10 +75,12 @@ always causal.
 
 The three layers still take a row each of four columns, but every tile is now 64x64: the
 score GEMM writes one block, the online softmax normalizes it, and the context GEMM
-folds it into the block of the output it holds resident across the whole key loop. All
-three skip the same blocks: the two kernels test the block indices themselves and return,
-and the score GEMM's call sits inside the same test, since a block it computed and no one
-read is pure loss.
+folds it into the block of the output it holds resident across the whole key loop. The two
+kernels test the block indices themselves and return on a block past the diagonal, and the
+score GEMM's call sits inside the same test. That last test is numerically a no-op -- the
+output hash is unchanged with it removed, since nothing reads the block it would write --
+and it is worth 1.040x at `seq_len = 4096` (6467 us against 6221) and nothing below 2048;
+at 512 it measured marginally slower, inside the noise.
 
 The running scale -- `[m_{i-1} | m_i | l_i | exp2(m_{i-1} - m_i)]`, four rows of 64 --
 **stays on the softmax core**, where it has to: it is read and written across key blocks.
@@ -87,7 +89,8 @@ fifo in the memory the two neighbouring cores already share -- no DMA channel. T
 is **two deep**, which is what lets the two cores run a key block apart. At depth one the
 fifo could be the running scale itself, one buffer and no copy, but then the softmax
 could not enter a block before the context GEMM had left the one before it, and the two
-ran strictly in turn: at `seq_len = 4096` that cost 1.7x.
+ran strictly in turn. Taking the state off the fifo and the fifo to depth two is worth
+**1.64x** at `seq_len = 4096`: 10613 us against 6467. It is where the speedup is.
 
 The two halves cannot share a core, which is why the scale has to cross at all. The
 probability block leaves the softmax row major and reaches the matmul in the MAC tiling,
@@ -140,16 +143,20 @@ At `seq_len=256, d_head=64` on Strix, against the golden at the tolerance
 back is a configure and a DDR round trip of the score and probability matrices per head.
 
 Blocked, against `iron/operators/mha` at the same sequence length, the same 64x64 block
-and the same twelve cores (`num_of_pipelines=4`), one head, largest deviation from the
-golden in the right-hand column:
+and the same twelve cores (`num_of_pipelines=4`), one head:
 
-| `seq_len` | 256 | 512 | 1024 | 2048 | 4096 | 8192 | deviation |
-|---|---|---|---|---|---|---|---|
-| `iron/operators/mha` | 123 us | 238 us | 630 us | 1837 us | 6430 us | 23579 us | |
-| `flash=True` | 299 us | 450 us | 735 us | 1869 us | 6197 us | 23007 us | 5.7e-2 |
+| `seq_len` | 256 | 512 | 1024 | 2048 | 4096 | 8192 |
+|---|---|---|---|---|---|---|
+| `iron/operators/mha` | 123 us | 238 us | 630 us | 1837 us | 6323 us | 23579 us |
+| `flash=True` | 299 us | 450 us | 735 us | 1869 us | 6197 us | 23007 us |
 
-Level with the hand-written design from `seq_len = 2048` on. Both skip the same masked-out
-blocks and move the same DMA traffic; what the generated design spends on top is a
-memory-tile hop for the score block and one for the probability block, where the
-hand-written one hops once. That fixed cost is what the short sequences pay: it is the
-whole of the gap at 256 and none of it at 4096.
+Level with the hand-written design from `seq_len = 2048` on: 0.98x at 4096, which is parity
+rather than a win. Both skip the same masked-out blocks and move the same DMA traffic; what
+the generated design spends on top is a memory-tile hop for the score block and one for the
+probability block, where the hand-written one hops once. That fixed cost is what the short
+sequences pay: it is the whole of the gap at 256 and none of it at 4096.
+
+At 4096 the hand-written design fails three elements against the tolerance above and this
+one fails none. Largest deviation from the golden is `4.88e-2` over 256 to 4096 and
+`5.7e-2` at 8192, all at one head; two heads at 256 reach `1.016e-1` against an `abs_tol`
+of `1.5e-1`, which is what the test watches.
