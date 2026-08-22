@@ -38,16 +38,35 @@ RESULT_NAMES = {SCORES_NODE: SCORES, SOFTMAX_NODE: PROBABILITIES, CONTEXT_NODE: 
 
 
 class AttentionCore(nn.Module):
-    """One head's scores, softmax and context, over a pre-scaled ``q``."""
+    """One head's scores, softmax and context, over a pre-scaled ``q``.
+
+    ``causal`` masks every key at a later position than its query, which is what prefill
+    computes; the mask is additive so it survives the export as an ordinary operand.
+    """
+
+    def __init__(self, causal: bool = False):
+        super().__init__()
+        self.causal = causal
 
     def forward(self, q, k_t, v):
-        return torch.softmax(q @ k_t, dim=-1) @ v
+        scores = q @ k_t
+        if self.causal:
+            scores = scores + _causal_mask(
+                scores.shape[-2], scores.shape[-1], scores.dtype
+            )
+        return torch.softmax(scores, dim=-1) @ v
 
 
-def attention_core_module() -> AttentionCore:
+def _causal_mask(seq_q: int, seq_k: int, dtype) -> torch.Tensor:
+    """Additive mask: 0 where a query may attend, -inf where it may not."""
+    keep = torch.ones(seq_q, seq_k, dtype=torch.bool).tril()
+    return torch.where(keep, 0.0, float("-inf")).to(dtype)
+
+
+def attention_core_module(causal: bool = False) -> AttentionCore:
     """The module the design is exported from. It holds no parameters: every operand
     is an activation the sequence hands in."""
-    return AttentionCore().eval()
+    return AttentionCore(causal).eval()
 
 
 def query_scale(d_head: int) -> float:
@@ -55,7 +74,9 @@ def query_scale(d_head: int) -> float:
     return 1.0 / math.sqrt(d_head)
 
 
-def generate_golden_reference(seq_len, d_head, heads=1, seed=42, dtype=torch.bfloat16):
+def generate_golden_reference(
+    seq_len, d_head, heads=1, seed=42, dtype=torch.bfloat16, causal=False
+):
     """Golden operands and output per head, with the query already scaled."""
     generator = torch.Generator().manual_seed(seed)
     shape = (heads, seq_len, d_head)
@@ -63,6 +84,6 @@ def generate_golden_reference(seq_len, d_head, heads=1, seed=42, dtype=torch.bfl
     k = torch.randn(shape, generator=generator).to(dtype)
     v = torch.randn(shape, generator=generator).to(dtype)
     q, k_t = q.to(dtype), k.transpose(1, 2).contiguous()
-    core = attention_core_module()
+    core = attention_core_module(causal)
     context = torch.stack([core(q[h], k_t[h], v[h]) for h in range(heads)])
     return {QUERY: q, KEY_TRANSPOSED: k_t, VALUE: v, CONTEXT: context}
