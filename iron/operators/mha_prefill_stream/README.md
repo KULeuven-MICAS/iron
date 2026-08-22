@@ -75,12 +75,19 @@ always causal.
 
 The three layers still take a row each of four columns, but every tile is now 64x64: the
 score GEMM writes one block, the online softmax normalizes it, and the context GEMM
-folds it into the block of the output it holds resident across the whole key loop. What
-crosses between the second row and the third is the running scale --
-`[m_{i-1} | m_i | l_i | exp2(m_{i-1} - m_i)]`, four rows of 64 -- as a **depth-one object
-fifo**, which between neighbouring cores is one shared buffer and a pair of locks: no DMA
-channel, no copy, and at depth one the producer cannot run into the next key block before
-the consumer is done with this one, which is what makes it state rather than a message.
+folds it into the block of the output it holds resident across the whole key loop. All
+three skip the same blocks: the two kernels test the block indices themselves and return,
+and the score GEMM's call sits inside the same test, since a block it computed and no one
+read is pure loss.
+
+The running scale -- `[m_{i-1} | m_i | l_i | exp2(m_{i-1} - m_i)]`, four rows of 64 --
+**stays on the softmax core**, where it has to: it is read and written across key blocks.
+What crosses to the third row is a copy of it, taken every key block, through an object
+fifo in the memory the two neighbouring cores already share -- no DMA channel. That fifo
+is **two deep**, which is what lets the two cores run a key block apart. At depth one the
+fifo could be the running scale itself, one buffer and no copy, but then the softmax
+could not enter a block before the context GEMM had left the one before it, and the two
+ran strictly in turn: at `seq_len = 4096` that cost 1.7x.
 
 The two halves cannot share a core, which is why the scale has to cross at all. The
 probability block leaves the softmax row major and reaches the matmul in the MAC tiling,
@@ -139,10 +146,10 @@ golden in the right-hand column:
 | `seq_len` | 256 | 512 | 1024 | 2048 | 4096 | 8192 | deviation |
 |---|---|---|---|---|---|---|---|
 | `iron/operators/mha` | 123 us | 238 us | 630 us | 1837 us | 6430 us | 23579 us | |
-| `flash=True` | 321 us | 480 us | 1018 us | 3054 us | 10645 us | 40257 us | 5.7e-2 |
+| `flash=True` | 299 us | 450 us | 735 us | 1869 us | 6197 us | 23007 us | 5.7e-2 |
 
-A little under twice the hand-written design, steady across the range. Both skip the same
-masked-out blocks inside the kernels and move the same DMA traffic; what the generated
-design spends on top is a memory-tile hop for the score block and one for the probability
-block, where the hand-written one hops once, and a depth-one scale fifo where it pipelines
-a copy at depth two.
+Level with the hand-written design from `seq_len = 2048` on. Both skip the same masked-out
+blocks and move the same DMA traffic; what the generated design spends on top is a
+memory-tile hop for the score block and one for the probability block, where the
+hand-written one hops once. That fixed cost is what the short sequences pay: it is the
+whole of the gap at 256 and none of it at 4096.

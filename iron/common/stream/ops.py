@@ -112,10 +112,19 @@ def _mha_artifacts(base_dir, kernel_dir):
     mha.cc includes mm.cc and softmax.cc, so one translation unit holds the partial
     softmax, the value accumulation and the rescale, and both cores of a step link
     against it. Its matmuls are compiled for the 64x64x64 block the kernels hard-code.
+    Beside it, the vectorized copy that takes a snapshot of the running scale off the
+    softmax core, built exactly as ``iron/operators/mha`` builds it.
     """
     from iron.common.compilation import KernelObjectArtifact, SourceArtifact
 
     return [
+        KernelObjectArtifact(
+            "mha_passThrough.o",
+            dependencies=[
+                SourceArtifact(base_dir / "aie_kernels" / "generic" / "passThrough.cc")
+            ],
+            extra_flags=["-DBIT_WIDTH=16"],
+        ),
         KernelObjectArtifact(
             "mha.o",
             dependencies=[
@@ -131,7 +140,7 @@ def _mha_artifacts(base_dir, kernel_dir):
                 "-DAIE_API_EMULATE_BFLOAT16_MMUL_WITH_BFP16",
                 "-DB_COL_MAJ",
             ],
-        )
+        ),
     ]
 
 

@@ -218,7 +218,8 @@ def _placements(seq_len, d_head, k, causal, flash=False):
     if k == 1:
         columns = grid.all_columns[:FUSED_COLUMNS]
         kwargs = {
-            SCORES_NODE: gemm(*tiles[SCORES_NODE]),
+            SCORES_NODE: gemm(*tiles[SCORES_NODE])
+            | ({"causal": True} if flash else {}),
             SOFTMAX_NODE: softmax,
             CONTEXT_NODE: gemm(*tiles[CONTEXT_NODE])
             | ({"flash": True} if flash else {}),
