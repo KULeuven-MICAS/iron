@@ -16,7 +16,7 @@ from iron.common import (
 from iron.common.device_utils import get_kernel_dir
 from iron.common.sequence import OperatorSequence
 from iron.common.stream.design import stream_revision
-from iron.common.stream.ops import FLASH, GEMM, SOFTMAX
+from iron.common.stream.ops import FLASH, FUSED_SCORE_SOFTMAX, GEMM, SOFTMAX
 
 BYTES_PER_ELEMENT = 2  # every buffer in a fused sequence is addressed as bfloat16
 
@@ -72,8 +72,15 @@ class _MHAStreamGroup(MLIROperator):
         design = self._design
         tiles = design.kernel_tiles(self.seq_len, self.d_head, self.k, self.flash)
         # Both halves of an online-softmax step are entry points of the same object.
+        score_layer = design.SCORE_LAYERS[0]
         per_layer = {
-            design.SCORES_NODE: (GEMM, tiles[design.SCORES_NODE]),
+            # Fused, the score side is one node against mha.o rather than a GEMM of its
+            # own, and its tile shape is the object's compiled block.
+            score_layer: (
+                (FUSED_SCORE_SOFTMAX, None)
+                if design.FUSED_KERNEL
+                else (GEMM, tiles[score_layer])
+            ),
             design.CONTEXT_NODE: (
                 (FLASH, None) if self.flash else (GEMM, tiles[design.CONTEXT_NODE])
             ),
@@ -116,10 +123,11 @@ class _MHAStreamGroup(MLIROperator):
 
     def get_arg_spec(self):
         """The group's runtime arguments, shaped by the exported graph."""
-        shapes = self._design.workload_for(self.seq_len, self.d_head).shapes
-        inputs, outputs = self._design.group_ports(self.seq_len, self.d_head, self.k)[
-            self.group_index
-        ]
+        fused = self.flash and self._design.FUSED_KERNEL
+        shapes = self._design.workload_for(self.seq_len, self.d_head, fused).shapes
+        inputs, outputs = self._design.group_ports(
+            self.seq_len, self.d_head, self.k, fused
+        )[self.group_index]
         return [AIERuntimeArgSpec("in", shapes[name]) for name in inputs] + [
             AIERuntimeArgSpec("out", shapes[name]) for name in outputs
         ]
@@ -163,6 +171,7 @@ class MHAPrefillStream(OperatorSequence):
         dispatch="auto",
     ):
         from iron.operators.mha_prefill_stream.stream_design import (
+            FUSED_KERNEL,
             LAYER_BY_LAYER,
             group_ports,
             trace_size,
@@ -171,7 +180,10 @@ class MHAPrefillStream(OperatorSequence):
         k = (1 if flash else LAYER_BY_LAYER) if k is None else k
         causal = causal or flash
         ports = [
-            inputs + outputs for inputs, outputs in group_ports(seq_len, d_head, k)
+            inputs + outputs
+            for inputs, outputs in group_ports(
+                seq_len, d_head, k, flash and FUSED_KERNEL
+            )
         ]
         groups = [
             _MHAStreamGroup(

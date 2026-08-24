@@ -18,6 +18,9 @@
 
 #define VECTOR_LENGTH 64
 
+// Rows and columns of the MAC tile mm.cc stores its result in.
+#define MAC_TILE 8
+
 #define ROUNDING_MODE aie::rounding_mode::conv_even
 
 // Row-major variants needed by matmul_PV.  Because there is no separate link
@@ -160,15 +163,51 @@ void rescale_O(bfloat16 *O, bfloat16 *scale_buffer, int32_t B_q, int32_t *idx_bu
     }
 }
 
-void partial_softmax(bfloat16 *A,
-                     bfloat16 *P,
-                     bfloat16 *scale_buffer,
-                     int32_t *idx_buffer,
-                     bfloat16 inv_scale,
-                     int32_t B_q,
-                     int32_t B_kv,
-                     int32_t S_q_eff,
-                     int32_t S_kv_eff)
+// A group of MAC_TILE rows gathered out of the GEMM's tiling into row-major order, with
+// the mask applied on the way. The group is the unit because the softmax writes row r of
+// its output over tile r of its input: within a group those are the same rows, so the
+// group is read out before any of it is overwritten.
+static inline void gather_group(const bfloat16 *A,
+                                bfloat16 *rows,
+                                int32_t B_kv,
+                                int32_t first,
+                                int32_t valid_q_rows,
+                                int32_t valid_kv_cols,
+                                int32_t diagonal)
+{
+    const int32_t tile = MAC_TILE * MAC_TILE;
+    const bfloat16 *base = A + (first / MAC_TILE) * tile * (B_kv / MAC_TILE);
+    for (int32_t k = 0; k < MAC_TILE; k++) {
+        const int32_t row = first + k;
+        int32_t keep = diagonal ? row + 1 : B_kv;
+        if (keep > valid_kv_cols) {
+            keep = valid_kv_cols;
+        }
+        if (row >= valid_q_rows) {
+            keep = 0;
+        }
+        // A row is MAC_TILE contiguous elements out of every tile, so it moves a vector
+        // at a time rather than an element at a time.
+        bfloat16 *out = rows + k * B_kv;
+        for (int32_t jt = 0; jt < B_kv / MAC_TILE; jt++) {
+            aie::store_v(out + jt * MAC_TILE, aie::load_v<MAC_TILE>(base + jt * tile + k * MAC_TILE));
+        }
+        for (int32_t j = keep; j < B_kv; j++) {
+            out[j] = std::numeric_limits<bfloat16>::lowest();
+        }
+    }
+}
+
+static void partial_softmax_body(bfloat16 *A,
+                                 bfloat16 *P,
+                                 bfloat16 *scale_buffer,
+                                 int32_t *idx_buffer,
+                                 bfloat16 inv_scale,
+                                 int32_t B_q,
+                                 int32_t B_kv,
+                                 int32_t S_q_eff,
+                                 int32_t S_kv_eff,
+                                 int32_t tiled)
 {
 
     ::aie::set_rounding(ROUNDING_MODE);
@@ -202,63 +241,79 @@ void partial_softmax(bfloat16 *A,
         return;
     }
 
-    // Tail mask: invalidate padded Q rows
-    if (valid_q_rows < B_q) {
-        using Vec64bf16 = aie::vector<bfloat16, VECTOR_LENGTH>;
-        Vec64bf16 lowest_vec = aie::broadcast<bfloat16, VECTOR_LENGTH>(std::numeric_limits<bfloat16>::lowest());
+    if (!tiled) {
+        // Tail mask: invalidate padded Q rows
+        if (valid_q_rows < B_q) {
+            using Vec64bf16 = aie::vector<bfloat16, VECTOR_LENGTH>;
+            Vec64bf16 lowest_vec = aie::broadcast<bfloat16, VECTOR_LENGTH>(std::numeric_limits<bfloat16>::lowest());
 
-        for (int32_t i = valid_q_rows; i < B_q; i++) {
-            for (int32_t j = 0; j < B_kv; j += VECTOR_LENGTH) {
-                aie::store_v(A + i * B_kv + j, lowest_vec);
-            }
-        }
-    }
-    // Tail mask: invalidate padded KV cols for valid rows
-    if (valid_kv_cols < B_kv) {
-        using Vec64bf16 = aie::vector<bfloat16, VECTOR_LENGTH>;
-        Vec64bf16 lowest_vec = aie::broadcast<bfloat16, VECTOR_LENGTH>(std::numeric_limits<bfloat16>::lowest());
-
-        for (int32_t i = 0; i < valid_q_rows; i++) {
-            int32_t j = valid_kv_cols;
-            for (; j + VECTOR_LENGTH <= B_kv; j += VECTOR_LENGTH) {
-                aie::store_v(A + i * B_kv + j, lowest_vec);
-            }
-            // Remainder loop
-            for (; j < B_kv; j++) {
-                A[i * B_kv + j] = std::numeric_limits<bfloat16>::lowest();
-            }
-        }
-    }
-
-    // Diagonal small causal mask only within valid region (vectorized)
-    if (kv_block_idx == q_block_idx) {
-        using Vec64bf16 = aie::vector<bfloat16, VECTOR_LENGTH>;
-        Vec64bf16 lowest_vec = aie::broadcast<bfloat16, VECTOR_LENGTH>(std::numeric_limits<bfloat16>::lowest());
-        for (int32_t i = 0; i < valid_q_rows; i++) {
-            int32_t j = i + 1;
-            if (j < valid_kv_cols) {
-                // Vectorized stores for upper triangle within valid_kv_cols
-                for (; j + VECTOR_LENGTH <= valid_kv_cols; j += VECTOR_LENGTH) {
+            for (int32_t i = valid_q_rows; i < B_q; i++) {
+                for (int32_t j = 0; j < B_kv; j += VECTOR_LENGTH) {
                     aie::store_v(A + i * B_kv + j, lowest_vec);
                 }
-                // Remainder
-                for (; j < valid_kv_cols; ++j) {
+            }
+        }
+        // Tail mask: invalidate padded KV cols for valid rows
+        if (valid_kv_cols < B_kv) {
+            using Vec64bf16 = aie::vector<bfloat16, VECTOR_LENGTH>;
+            Vec64bf16 lowest_vec = aie::broadcast<bfloat16, VECTOR_LENGTH>(std::numeric_limits<bfloat16>::lowest());
+
+            for (int32_t i = 0; i < valid_q_rows; i++) {
+                int32_t j = valid_kv_cols;
+                for (; j + VECTOR_LENGTH <= B_kv; j += VECTOR_LENGTH) {
+                    aie::store_v(A + i * B_kv + j, lowest_vec);
+                }
+                // Remainder loop
+                for (; j < B_kv; j++) {
                     A[i * B_kv + j] = std::numeric_limits<bfloat16>::lowest();
+                }
+            }
+        }
+
+        // Diagonal small causal mask only within valid region (vectorized)
+        if (kv_block_idx == q_block_idx) {
+            using Vec64bf16 = aie::vector<bfloat16, VECTOR_LENGTH>;
+            Vec64bf16 lowest_vec = aie::broadcast<bfloat16, VECTOR_LENGTH>(std::numeric_limits<bfloat16>::lowest());
+            for (int32_t i = 0; i < valid_q_rows; i++) {
+                int32_t j = i + 1;
+                if (j < valid_kv_cols) {
+                    // Vectorized stores for upper triangle within valid_kv_cols
+                    for (; j + VECTOR_LENGTH <= valid_kv_cols; j += VECTOR_LENGTH) {
+                        aie::store_v(A + i * B_kv + j, lowest_vec);
+                    }
+                    // Remainder
+                    for (; j < valid_kv_cols; ++j) {
+                        A[i * B_kv + j] = std::numeric_limits<bfloat16>::lowest();
+                    }
                 }
             }
         }
     }
 
     using Vec64bf16 = aie::vector<bfloat16, VECTOR_LENGTH>;
-    int32_t i = 0;
-    for (; i + 4 <= valid_q_rows; i += 4) {
-        partial_softmax_bf16(A + B_kv * i, P + B_kv * i, scale_buffer, B_kv, i, B_q, inv_scale);
-        partial_softmax_bf16(A + B_kv * (i + 1), P + B_kv * (i + 1), scale_buffer, B_kv, i + 1, B_q, inv_scale);
-        partial_softmax_bf16(A + B_kv * (i + 2), P + B_kv * (i + 2), scale_buffer, B_kv, i + 2, B_q, inv_scale);
-        partial_softmax_bf16(A + B_kv * (i + 3), P + B_kv * (i + 3), scale_buffer, B_kv, i + 3, B_q, inv_scale);
-    }
-    for (; i < valid_q_rows; i++) {
-        partial_softmax_bf16(A + B_kv * i, P + B_kv * i, scale_buffer, B_kv, i, B_q, inv_scale);
+
+    if (tiled) {
+        // One group of rows in flight, which is 1 KB rather than a second block.
+        alignas(64) static bfloat16 rows[MAC_TILE * VECTOR_LENGTH];
+        const int32_t diagonal = kv_block_idx == q_block_idx;
+        for (int32_t first = 0; first < valid_q_rows; first += MAC_TILE) {
+            gather_group(A, rows, B_kv, first, valid_q_rows, valid_kv_cols, diagonal);
+            for (int32_t k = 0; k < MAC_TILE && first + k < valid_q_rows; k++) {
+                partial_softmax_bf16(rows + B_kv * k, P + B_kv * (first + k), scale_buffer, B_kv, first + k, B_q,
+                                     inv_scale);
+            }
+        }
+    } else {
+        int32_t i = 0;
+        for (; i + 4 <= valid_q_rows; i += 4) {
+            partial_softmax_bf16(A + B_kv * i, P + B_kv * i, scale_buffer, B_kv, i, B_q, inv_scale);
+            partial_softmax_bf16(A + B_kv * (i + 1), P + B_kv * (i + 1), scale_buffer, B_kv, i + 1, B_q, inv_scale);
+            partial_softmax_bf16(A + B_kv * (i + 2), P + B_kv * (i + 2), scale_buffer, B_kv, i + 2, B_q, inv_scale);
+            partial_softmax_bf16(A + B_kv * (i + 3), P + B_kv * (i + 3), scale_buffer, B_kv, i + 3, B_q, inv_scale);
+        }
+        for (; i < valid_q_rows; i++) {
+            partial_softmax_bf16(A + B_kv * i, P + B_kv * i, scale_buffer, B_kv, i, B_q, inv_scale);
+        }
     }
     // Zero out P rows corresponding to padded Q rows
     if (valid_q_rows < B_q) {
@@ -290,6 +345,60 @@ void partial_softmax(bfloat16 *A,
         aie::store_v(scale_buffer + 2 * B_q + i, l_i.to_vector<bfloat16>());
         aie::store_v(scale_buffer + i, m_i);
     }
+}
+
+void partial_softmax(bfloat16 *A,
+                     bfloat16 *P,
+                     bfloat16 *scale_buffer,
+                     int32_t *idx_buffer,
+                     bfloat16 inv_scale,
+                     int32_t B_q,
+                     int32_t B_kv,
+                     int32_t S_q_eff,
+                     int32_t S_kv_eff)
+{
+    partial_softmax_body(A, P, scale_buffer, idx_buffer, inv_scale, B_q, B_kv, S_q_eff, S_kv_eff, 0);
+}
+
+// One online-softmax step whole: the score GEMM straight into the probability block, and
+// the softmax over it without the block leaving the core. Two layouts come with that: the
+// key is row major here, the way the score GEMM's own object is compiled and unlike the
+// rest of mha.cc, and the result stays in the MAC tiling, so the softmax reads it tiled.
+void matmul_softmax(bfloat16 *Q,
+                    bfloat16 *K,
+                    bfloat16 *P,
+                    bfloat16 *scale_buffer,
+                    int32_t *idx_buffer,
+                    bfloat16 inv_scale,
+                    int32_t B_q,
+                    int32_t B_kv,
+                    int32_t S_q_eff,
+                    int32_t S_kv_eff)
+{
+    ::aie::set_rounding(ROUNDING_MODE);
+
+    if (idx_buffer[0] > idx_buffer[1]) {
+        zero_bf16(P);
+        return;
+    }
+
+    // The mmul accumulates into its result, so the block starts zeroed the way the score
+    // GEMM zeroes it before its own call.
+    zero_bf16(P);
+
+    constexpr unsigned r = 8, s = 8, t = 8;
+    matmul_vectorized_2x2_mmul<bfloat16,
+                               bfloat16,
+                               (DIM_M / r),
+                               (DIM_K / s),
+                               (DIM_N / t),
+                               r,
+                               s,
+                               t,
+                               /*b_row_maj=*/true,
+                               /*c_row_maj=*/true>(Q, K, P);
+
+    partial_softmax_body(P, P, scale_buffer, idx_buffer, inv_scale, B_q, B_kv, S_q_eff, S_kv_eff, 1);
 }
 
 void init_scale_buffer(bfloat16 *scale_buffer, int32_t size)

@@ -43,8 +43,11 @@ from iron.common.stream.mapping import (
 from iron.common.stream.workload import export_workload
 from iron.operators.mha_prefill_stream.reference import (
     CONTEXT_NODE,
+    FUSED_NODE_NAMES,
+    FUSED_RESULT_NAMES,
     NODE_NAMES,
     RESULT_NAMES,
+    SCORE_SOFTMAX_NODE,
     SCORES_NODE,
     SOFTMAX_NODE,
     attention_core_module,
@@ -57,7 +60,7 @@ ACCELERATOR = os.path.join(
     "hardware",
     "whole_array_strix.yaml",
 )
-BACKEND = "ortools_gscip"  # license-free OR-Tools GSCIP, no Gurobi needed
+BACKEND = os.environ.get("STREAM_BACKEND", "ortools_gscip")  # license-free OR-Tools GSCIP by default
 OUTPUT_ROOT = "outputs"
 
 # Columns a GEMM layer spans, splitting its output dimension over them on top of the
@@ -84,8 +87,12 @@ COLUMNS_IN_USE = 8
 # fused with the softmax may not.
 _KEY_BLOCK = 64
 
-# The one block mha.cc's flash kernels are written for: query, key and head all 64.
+# The one block mha.cc's flash kernels are written for: key and head both 64, since
+# matmul_PV reuses the score GEMM's compiled dimensions. The query is not tied to it --
+# it only sets DIM_M, which the kernels take as any multiple of 16 -- and enlarging it
+# divides the number of query steps, and with it how often K and V are streamed again.
 FLASH_BLOCK = 64
+FLASH_QUERY = int(os.environ.get("IRON_FLASH_QUERY", FLASH_BLOCK))
 
 
 def key_tile(seq_len, k, flash=False):
@@ -94,9 +101,16 @@ def key_tile(seq_len, k, flash=False):
     return seq_len if k == 1 else _KEY_BLOCK
 
 
+# The score GEMM and the online softmax as one kernel on one core. Three fused layers
+# take a row each and leave the array's fourth idle; two take two rows each and cover it,
+# and the score block stops making a round trip through the memory tile between them.
+FUSED_KERNEL = os.environ.get("IRON_FUSED_KERNEL", "0") == "1"
+
+SCORE_LAYERS = [SCORE_SOFTMAX_NODE] if FUSED_KERNEL else [SCORES_NODE, SOFTMAX_NODE]
+
 LAYER_BY_LAYER = 3
 GROUP_LAYERS = {
-    1: [[SCORES_NODE, SOFTMAX_NODE, CONTEXT_NODE]],
+    1: [[*SCORE_LAYERS, CONTEXT_NODE]],
     LAYER_BY_LAYER: [[SCORES_NODE], [SOFTMAX_NODE], [CONTEXT_NODE]],
 }
 
@@ -113,7 +127,23 @@ SOFTMAX_CORES = (0, 1, 2, 3)
 # it spans and the query dimension splits over the columns instead of over the rows.
 # Overridable so a sweep can compare column counts; four is the design's own default.
 FUSED_COLUMNS = int(os.environ.get("IRON_FUSED_COLUMNS", "4"))
-FUSED_ROWS = {SCORES_NODE: (0,), SOFTMAX_NODE: (1,), CONTEXT_NODE: (2,)}
+# Which rows of a column each fused layer sits on. Three rows leaves the array's fourth
+# idle, so a layer may be given two of them; IRON_FUSED_ROWS is "<scores>|<softmax>|
+# <context>" with each field the row indices, e.g. "03|1|2" to widen the score GEMM.
+# Fused, the two layers pair up the array's four rows. The pairing is not free: the
+# running scale crosses between a step's two halves through the memory the tiles already
+# share, so each core needs its partner directly above or below it and no other. Rows
+# 1 and 2 against 0 and 3 is the one split of four rows where that holds both ways.
+_DEFAULT_ROWS = "12|03" if FUSED_KERNEL else "0|1|2"
+FUSED_ROWS = dict(
+    zip(
+        [*SCORE_LAYERS, CONTEXT_NODE],
+        (
+            tuple(int(c) for c in field)
+            for field in os.environ.get("IRON_FUSED_ROWS", _DEFAULT_ROWS).split("|")
+        ),
+    )
+)
 # Query positions a fused GEMM works at a time. The head's whole key or value sits on the
 # core beside them -- 32 KB of a 64 KB core at seq_len 256 -- so the tile is what is left.
 FUSED_QUERY_TILE = 16
@@ -130,7 +160,9 @@ def array() -> ComputeArray:
 def query_split(k):
     """How many cores the query dimension splits over: a column's rows while each layer
     has the column to itself, the columns once the three layers take a row each."""
-    return FUSED_COLUMNS if k == 1 else array().num_rows
+    if k != 1:
+        return array().num_rows
+    return FUSED_COLUMNS * max(len(rows) for rows in FUSED_ROWS.values())
 
 
 def query_per_core(seq_len, k):
@@ -144,7 +176,7 @@ def query_tile(seq_len, k, flash=False):
     are resident beside the tile, so the query is what iterates instead. Blocked, the
     kernels fix the block and both the query and the key iterate."""
     if flash:
-        return FLASH_BLOCK
+        return FLASH_QUERY
     return FUSED_QUERY_TILE if k == 1 else query_per_core(seq_len, k)
 
 
@@ -164,7 +196,7 @@ def _scores_tile(seq_len, d_head, k, flash=False):
     block onwards comes back wrong.
     """
     if flash:
-        return FLASH_BLOCK, d_head, FLASH_BLOCK
+        return FLASH_QUERY, d_head, FLASH_BLOCK
     query, key = query_tile(seq_len, k), seq_len // GEMM_COLUMNS
     if k == 1:
         return query, d_head, seq_len
@@ -177,7 +209,7 @@ def kernel_tiles(seq_len, d_head, k, flash=False):
     """Each GEMM layer's kernel tile, in the (m, k, n) order the kernel takes. The
     kernel tile and the intra-core tile are the same tile, so they are declared once."""
     return {
-        SCORES_NODE: _scores_tile(seq_len, d_head, k, flash),
+        SCORE_LAYERS[0]: _scores_tile(seq_len, d_head, k, flash),
         CONTEXT_NODE: (
             query_tile(seq_len, k, flash),
             key_tile(seq_len, k, flash),
@@ -219,16 +251,27 @@ def _placements(seq_len, d_head, k, causal, flash=False):
         softmax["causal"] = True
     if k == 1:
         columns = grid.all_columns[:FUSED_COLUMNS]
-        kwargs = {
-            SCORES_NODE: gemm(*tiles[SCORES_NODE])
-            | ({"causal": True} if flash else {}),
-            SOFTMAX_NODE: softmax,
-            CONTEXT_NODE: gemm(*tiles[CONTEXT_NODE])
-            | ({"flash": True} if flash else {}),
-        }
+        if FUSED_KERNEL:
+            # The mask lives inside the fused kernel, the way it already does inside the
+            # softmax, so the score side asks for no causal entry point of its own.
+            kwargs = {
+                SCORE_SOFTMAX_NODE: gemm(*tiles[SCORE_SOFTMAX_NODE]),
+                CONTEXT_NODE: gemm(*tiles[CONTEXT_NODE]) | {"flash": True},
+            }
+        else:
+            kwargs = {
+                SCORES_NODE: gemm(*tiles[SCORES_NODE])
+                | ({"causal": True} if flash else {}),
+                SOFTMAX_NODE: softmax,
+                CONTEXT_NODE: gemm(*tiles[CONTEXT_NODE])
+                | ({"flash": True} if flash else {}),
+            }
         return {
             layer: Placement(
-                columns, (("D0", FUSED_COLUMNS),), kw, rows=FUSED_ROWS[layer]
+                columns,
+                (("D0", FUSED_COLUMNS * len(FUSED_ROWS[layer])),),
+                kw,
+                rows=FUSED_ROWS[layer],
             )
             for layer, kw in kwargs.items()
         }
@@ -255,7 +298,7 @@ def _placements(seq_len, d_head, k, causal, flash=False):
 def _layer_tiling(layer, seq_len, d_head, k, flash=False):
     """Each of the layer's dimensions, as (dim, tile, the extent one core holds)."""
     query = query_per_core(seq_len, k)
-    if layer == SCORES_NODE:
+    if layer in (SCORES_NODE, SCORE_SOFTMAX_NODE):
         rows, contraction, key = _scores_tile(seq_len, d_head, k, flash)
         return [
             ("D0", rows, query),
@@ -316,13 +359,26 @@ def _check_shapes(seq_len, d_head, k, flash=False):
                 f"mha.cc's flash kernels reuse the score GEMM's compiled block, which "
                 f"holds only when d_head is {FLASH_BLOCK}, not {d_head}"
             )
-        if seq_len % (FLASH_BLOCK * FUSED_COLUMNS):
+        if FLASH_QUERY % 16 or FLASH_QUERY < FLASH_BLOCK:
+            raise ValueError(
+                f"the query block is the GEMM's DIM_M and must be a multiple of 16 no "
+                f"smaller than the key block, not {FLASH_QUERY}"
+            )
+        resident = BYTES_PER_ELEMENT * 2 * (
+            FLASH_QUERY * d_head + FLASH_BLOCK * d_head + FLASH_QUERY * FLASH_BLOCK
+        )
+        if resident > CORE_BYTES:
+            raise ValueError(
+                f"a flash score core needs {resident} bytes for a {FLASH_QUERY} query "
+                f"block, over the {CORE_BYTES} byte core"
+            )
+        if seq_len % (FLASH_QUERY * FUSED_COLUMNS):
             # A query block shorter than the kernel's would read a scale row the
             # per-block reset does not clear.
             raise ValueError(
-                f"seq_len {seq_len} must be a multiple of {FLASH_BLOCK * FUSED_COLUMNS}: "
+                f"seq_len {seq_len} must be a multiple of {FLASH_QUERY * FUSED_COLUMNS}: "
                 f"the query splits over {FUSED_COLUMNS} columns in whole blocks of "
-                f"{FLASH_BLOCK}"
+                f"{FLASH_QUERY}"
             )
         return
     for name, extent, split in (
@@ -366,11 +422,12 @@ def _check_shapes(seq_len, d_head, k, flash=False):
 def workload_for(seq_len, d_head, flash=False):
     """The exported workload for one problem size."""
     zeros = lambda *shape: torch.zeros(shape, dtype=torch.bfloat16)  # noqa: E731
+    fused = flash and FUSED_KERNEL
     return export_workload(
-        attention_core_module(flash=flash),
+        attention_core_module(flash=flash, fused=fused),
         (zeros(seq_len, d_head), zeros(d_head, seq_len), zeros(seq_len, d_head)),
-        node_names=NODE_NAMES,
-        result_names=RESULT_NAMES,
+        node_names=FUSED_NODE_NAMES if fused else NODE_NAMES,
+        result_names=FUSED_RESULT_NAMES if fused else RESULT_NAMES,
     )
 
 
@@ -401,6 +458,17 @@ def _experiment_id(seq_len, d_head, k, causal, flash):
     # records it, so without this a sweep over it is served the first design generated.
     if k == 1:
         suffix += f"_c{FUSED_COLUMNS}"
+        if flash and FLASH_QUERY != FLASH_BLOCK:
+            suffix += f"_q{FLASH_QUERY}"
+        rows = os.environ.get("IRON_FUSED_ROWS", _DEFAULT_ROWS)
+        suffix += "_r" + rows.replace("|", "_")
+        # Fusing the score side is a different graph, not just a different placement.
+        if FUSED_KERNEL:
+            suffix += "_fused"
+        # Residency changes the design but nothing else in the id records it, so without
+        # this both settings are served whichever was generated first.
+        if os.environ.get("STREAM_MEMTILE_RESEND", "0") != "0":
+            suffix += "_resident"
     if flash:
         suffix += "_flash"
     elif causal:
@@ -457,9 +525,13 @@ def _group_text(group_index, *, k, seq_len, d_head, npu, causal, flash) -> str:
     )
 
 
-def group_ports(seq_len, d_head, k=LAYER_BY_LAYER):
-    """Per fused group, the tensor names it takes in and hands on."""
-    return group_boundaries(workload_for(seq_len, d_head), GROUP_LAYERS[k])
+def group_ports(seq_len, d_head, k=LAYER_BY_LAYER, fused=False):
+    """Per fused group, the tensor names it takes in and hands on.
+
+    Fusing the score side is a different graph with different node names, so its
+    boundaries are read off that graph; every other design reads off the plain one.
+    """
+    return group_boundaries(workload_for(seq_len, d_head, fused), GROUP_LAYERS[k])
 
 
 def group_digest(group_index, **dims) -> str:

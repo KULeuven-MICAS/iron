@@ -36,6 +36,12 @@ NODE_NAMES = [SCORES_NODE, SOFTMAX_NODE, CONTEXT_NODE]
 
 RESULT_NAMES = {SCORES_NODE: SCORES, SOFTMAX_NODE: PROBABILITIES, CONTEXT_NODE: CONTEXT}
 
+# The same block with the score GEMM and the online softmax exported as one node, which
+# is what lets the two of them share a core and the design cover four rows.
+SCORE_SOFTMAX_NODE = "Attn_ScoreSoftmax"
+FUSED_NODE_NAMES = [SCORE_SOFTMAX_NODE, CONTEXT_NODE]
+FUSED_RESULT_NAMES = {SCORE_SOFTMAX_NODE: PROBABILITIES, CONTEXT_NODE: CONTEXT}
+
 
 class AttentionCore(nn.Module):
     """One head's scores, softmax and context, over a pre-scaled ``q``.
@@ -51,17 +57,20 @@ class AttentionCore(nn.Module):
     probabilities come out unnormalised, exactly as they leave the kernel.
     """
 
-    def __init__(self, causal: bool = False, flash: bool = False):
+    def __init__(self, causal: bool = False, flash: bool = False, fused: bool = False):
         super().__init__()
         self.causal = causal
         self.flash = flash
+        self.fused = fused
 
     def forward(self, q, k_t, v):
-        scores = q @ k_t
         if self.flash:
             import iron.common.stream.ops  # noqa: F401  (registers the operator)
 
-            return torch.ops.iron_stream.partial_softmax(scores) @ v
+            if self.fused:
+                return torch.ops.iron_stream.matmul_softmax(q, k_t) @ v
+            return torch.ops.iron_stream.partial_softmax(q @ k_t) @ v
+        scores = q @ k_t
         if self.causal:
             scores = scores + causal_mask(
                 scores.shape[-2], scores.shape[-1], scores.dtype
@@ -75,10 +84,12 @@ def causal_mask(seq_q: int, seq_k: int, dtype) -> torch.Tensor:
     return torch.where(keep, 0.0, float("-inf")).to(dtype)
 
 
-def attention_core_module(causal: bool = False, flash: bool = False) -> AttentionCore:
+def attention_core_module(
+    causal: bool = False, flash: bool = False, fused: bool = False
+) -> AttentionCore:
     """The module the design is exported from. It holds no parameters: every operand
     is an activation the sequence hands in."""
-    return AttentionCore(causal, flash).eval()
+    return AttentionCore(causal, flash, fused).eval()
 
 
 def query_scale(d_head: int) -> float:

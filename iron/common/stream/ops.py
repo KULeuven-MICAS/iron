@@ -233,6 +233,23 @@ SOFTMAX = StreamKernel(
     key="softmax", layouts=softmax_layouts, source="softmax", only_on="aie2p"
 )
 
+def fused_score_softmax_layouts(
+    m: int, k: int, n: int, bfp16_mmul: bool = False
+) -> tuple[TiledStridedLayout, ...]:
+    """Layouts of the fused score GEMM's ``Q``, ``k_t`` and probability block.
+
+    The operands as the GEMM takes them, but the block leaves row major rather than
+    MAC tiled: that is the layout the online softmax behind it reads, and having the
+    GEMM write it directly is what lets the two share a core.
+    """
+    rows = mac_rows(bfp16_mmul)
+    return (
+        tiled_2d(m, k, rows, S),
+        tiled_2d(k, n, S, T),
+        contiguous_tiled_2d(m, n, rows, T),
+    )
+
+
 # mha.cc's flash kernels, both halves of an online-softmax step, live in one object.
 FLASH = StreamKernel(
     key="partial_softmax",
@@ -241,8 +258,18 @@ FLASH = StreamKernel(
     only_on="aie2p",
 )
 
+# The score GEMM and the online softmax as one node, so two fused layers cover the
+# four rows that three layers leave one of idle.
+FUSED_SCORE_SOFTMAX = StreamKernel(
+    key="matmul_softmax",
+    layouts=fused_score_softmax_layouts,
+    artifacts=_mha_artifacts,
+    only_on="aie2p",
+)
+
 Silu = custom_op("Silu")
 PartialSoftmax = custom_op("PartialSoftmax")
+MatmulSoftmax = custom_op("MatmulSoftmax", arity=2)
 
 
 @torch.library.custom_op("iron_stream::partial_softmax", mutates_args=())
@@ -262,6 +289,22 @@ def _(x: torch.Tensor) -> torch.Tensor:
     return torch.empty_like(x)
 
 
+@torch.library.custom_op("iron_stream::matmul_softmax", mutates_args=())
+def matmul_softmax(q: torch.Tensor, k_t: torch.Tensor) -> torch.Tensor:
+    """The score GEMM and one online-softmax step over the block it produces.
+
+    The same value as the two nodes it replaces, so the golden output is unchanged:
+    what moves is where the block is computed, not what it holds.
+    """
+    scores = q @ k_t
+    return torch.exp(scores - scores.amax(dim=-1, keepdim=True))
+
+
+@matmul_softmax.register_fake
+def _(q: torch.Tensor, k_t: torch.Tensor) -> torch.Tensor:
+    return q.new_empty((*q.shape[:-1], k_t.shape[-1]))
+
+
 def _to_gemm(a, b):
     return opset18.Gemm(a, b)
 
@@ -272,6 +315,10 @@ def _to_silu(x):
 
 def _to_partial_softmax(x):
     return PartialSoftmax(x)
+
+
+def _to_matmul_softmax(a, b):
+    return MatmulSoftmax(a, b)
 
 
 def _to_mul(a, b):
@@ -310,6 +357,9 @@ TORCH_OPS: dict[Callable, StreamOp] = {
     torch.ops.aten.softmax.int: StreamOp("Softmax", SOFTMAX, _to_softmax),
     torch.ops.iron_stream.partial_softmax.default: StreamOp(
         "PartialSoftmax", FLASH, _to_partial_softmax
+    ),
+    torch.ops.iron_stream.matmul_softmax.default: StreamOp(
+        "MatmulSoftmax", FUSED_SCORE_SOFTMAX, _to_matmul_softmax
     ),
 }
 
