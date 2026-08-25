@@ -22,17 +22,16 @@ class SwigluFrontFusedKernel(AIEKernelWithZeroing):
 
     @property
     def zero_name(self) -> str:
-        assert False, "TODO"  # TODO
-        return f"zero_{self.m}_{self.k}_{self.n}"
+        # TODO actually write this kernel
+        return f"swiglu_fused_zero_{self.m}_{self.k}_{self.n}"
 
     def zero_type(self, op: ComputationNodeOp) -> FunctionType:
-        assert False, "TODO"  # TODO
         return FunctionType.from_lists(inputs=[op.inputs[2].type], outputs=[])
 
     @property
     def linkwith_name(self) -> str:
-        assert False, "TODO"  # TODO
-        return f"mm_{self.m}_{self.k}_{self.n}.o"
+        # TODO actually write this kernel
+        return f"swiglu_fused_core_{self.m}_{self.k}_{self.n}"
 
     @property
     def function_name(self) -> str:
@@ -40,7 +39,7 @@ class SwigluFrontFusedKernel(AIEKernelWithZeroing):
 
     def operand_layouts(self) -> Sequence[TiledStridedLayout]:
         # TODO rework?
-        r = MAC_ROWS_BFP16 if self.bfp16_mmul else 4
+        r = 8
         s = 8
         t = 8
         mt = self.m // r
@@ -71,7 +70,6 @@ class SwigluFrontFusedKernel(AIEKernelWithZeroing):
         ]
 
     def function_type(self, op: ComputationNodeOp) -> FunctionType:
-        assert False, "TODO" # TODO
         assert op.output is not None
         return FunctionType.from_lists(
             inputs=[op.inputs[0].type]  # A
@@ -81,7 +79,6 @@ class SwigluFrontFusedKernel(AIEKernelWithZeroing):
         )
 
     def function_call(self, op: ComputationNodeOp) -> Sequence[Operation]:
-        assert False, "TODO"  # TODO
         assert op.output is not None
         return [
             CallOp(self.function_name, [op.inputs[0], op.inputs[1], op.inputs[2]], []),
