@@ -44,9 +44,6 @@ class Placement:
     # Order this layer's cores row by row rather than column by column, so a layer wider
     # than the one it feeds keeps its cores in that consumer's column. See ComputeArray.cores.
     by_row: bool = False
-    # What this layer's analytical cost has to be multiplied by to match hardware, as
-    # measured by a trace. One leaves the model as it was.
-    cost_scale: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -113,9 +110,6 @@ def _layer_entry(
             [{"dim": dim, "split": split} for dim, split in placement.splits]
         ],
         "kernel": {"name": kernel_key, "kwargs": dict(placement.kernel_kwargs)},
-        # Only when it says something: an entry a stream release does not know the key for
-        # is one it has to reject, and an uncalibrated layer has nothing to tell it.
-        **({"cost_scale": placement.cost_scale} if placement.cost_scale != 1.0 else {}),
     }
 
 
