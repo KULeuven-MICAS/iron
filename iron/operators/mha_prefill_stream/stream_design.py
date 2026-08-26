@@ -61,7 +61,9 @@ ACCELERATOR = os.path.join(
     "hardware",
     "whole_array_strix.yaml",
 )
-BACKEND = os.environ.get("STREAM_BACKEND", "ortools_gscip")  # license-free OR-Tools GSCIP by default
+BACKEND = os.environ.get(
+    "STREAM_BACKEND", "ortools_gscip"
+)  # license-free OR-Tools GSCIP by default
 OUTPUT_ROOT = "outputs"
 
 # Columns a GEMM layer spans, splitting its output dimension over them on top of the
@@ -157,6 +159,8 @@ def fused_rows(seq_len: int = 0, flash: bool = False) -> dict:
             (tuple(int(c) for c in field) for field in spec.split("|")),
         )
     )
+
+
 # Query positions a fused GEMM works at a time. The head's whole key or value sits on the
 # core beside them -- 32 KB of a 64 KB core at seq_len 256 -- so the tile is what is left.
 FUSED_QUERY_TILE = 16
@@ -175,7 +179,9 @@ def query_split(k, seq_len=0, flash=False):
     has the column to itself, the columns once the three layers take a row each."""
     if k != 1:
         return array().num_rows
-    return FUSED_COLUMNS * max(len(rows) for rows in fused_rows(seq_len, flash).values())
+    return FUSED_COLUMNS * max(
+        len(rows) for rows in fused_rows(seq_len, flash).values()
+    )
 
 
 def query_per_core(seq_len, k, flash=False):
@@ -385,8 +391,10 @@ def _check_shapes(seq_len, d_head, k, flash=False):
                 f"the query block is the GEMM's DIM_M and must be a multiple of 16 no "
                 f"smaller than the key block, not {FLASH_QUERY}"
             )
-        resident = BYTES_PER_ELEMENT * 2 * (
-            FLASH_QUERY * d_head + FLASH_BLOCK * d_head + FLASH_QUERY * FLASH_BLOCK
+        resident = (
+            BYTES_PER_ELEMENT
+            * 2
+            * (FLASH_QUERY * d_head + FLASH_BLOCK * d_head + FLASH_QUERY * FLASH_BLOCK)
         )
         if resident > CORE_BYTES:
             raise ValueError(
@@ -482,16 +490,13 @@ def _experiment_id(seq_len, d_head, k, causal, flash):
         if flash and FLASH_QUERY != FLASH_BLOCK:
             suffix += f"_q{FLASH_QUERY}"
         spec = "".join(
-            "|" + "".join(str(r) for r in rs) for rs in fused_rows(seq_len, flash).values()
+            "|" + "".join(str(r) for r in rs)
+            for rs in fused_rows(seq_len, flash).values()
         )
         suffix += "_r" + spec.lstrip("|").replace("|", "_")
         # Fusing the score side is a different graph, not just a different placement.
         if FUSED_KERNEL:
             suffix += "_fused"
-        # Residency changes the design but nothing else in the id records it, so without
-        # this both settings are served whichever was generated first.
-        if os.environ.get("STREAM_MEMTILE_RESEND", "0") != "0":
-            suffix += "_resident"
     if flash:
         suffix += "_flash"
     elif causal:

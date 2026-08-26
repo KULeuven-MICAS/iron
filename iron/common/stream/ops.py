@@ -96,6 +96,7 @@ def softmax_layouts(n: int) -> tuple[TiledStridedLayout, ...]:
 # The one block shape mha.cc's flash kernels are written for.
 FLASH_TILE = 64
 
+
 def flash_layouts(
     tiled_in: bool = False, tiled_out: bool = False
 ) -> tuple[TiledStridedLayout, ...]:

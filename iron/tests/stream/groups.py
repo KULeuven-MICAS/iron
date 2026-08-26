@@ -147,3 +147,19 @@ def test_generated_group_resolves_its_kernels(design, dims, k, index):
     except FileNotFoundError:
         pytest.skip("design not generated")
     assert design_findings(mlir) == []
+
+
+def test_the_fused_score_kernel_maps_onto_its_cores(monkeypatch, tmp_path):
+    """The fused score-and-softmax node is reachable only through IRON_FUSED_KERNEL, so
+    the cases above generate the three-layer design and never this one."""
+    monkeypatch.setattr(mha, "FUSED_KERNEL", True)
+    monkeypatch.setattr(mha, "SCORE_LAYERS", [mha.SCORE_SOFTMAX_NODE])
+    monkeypatch.setattr(mha, "workload_for", mha.workload_for.__wrapped__)
+    monkeypatch.setitem(
+        mha.GROUP_LAYERS, 1, [[mha.SCORE_SOFTMAX_NODE, mha.CONTEXT_NODE]]
+    )
+    _, path = mha.build_inputs(256, 64, output_dir=str(tmp_path), k=1, flash=True)
+    mapping = yaml.safe_load(Path(path).read_text())
+    kernels = {layer["name"]: layer["kernel"]["name"] for layer in mapping["layers"]}
+    assert kernels[mha.SCORE_SOFTMAX_NODE] == "matmul_softmax"
+    assert group_findings(mapping, 0) == []
