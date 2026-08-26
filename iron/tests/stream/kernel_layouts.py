@@ -73,11 +73,20 @@ def test_softmax_layouts_match_stream(n):
     )
 
 
-def test_flash_layouts_match_stream():
+@pytest.mark.parametrize("tiled_in", [False, True])
+@pytest.mark.parametrize("tiled_out", [False, True])
+def test_flash_layouts_match_stream(tiled_in, tiled_out):
+    """Either side may meet a core directly, and then it carries the GEMM's own tiling."""
     _assert_same(
-        flash_layouts(),
+        flash_layouts(tiled_in, tiled_out),
         AIEKernels[FLASH.key](
-            50.0, n=FLASH_TILE, layout="contiguous", m=FLASH_TILE, bfp16_mmul=True
+            50.0,
+            n=FLASH_TILE,
+            layout="contiguous",
+            m=FLASH_TILE,
+            bfp16_mmul=True,
+            tiled_in=tiled_in,
+            tiled_out=tiled_out,
         ),
     )
 

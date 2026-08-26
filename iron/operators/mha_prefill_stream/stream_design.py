@@ -31,6 +31,7 @@ from iron.common.stream.design import (
     region_module,
     stream_revision,
     trace_size,
+    trace_tile_list,
     trace_tiles,
 )
 from iron.common.stream.hardware import ComputeArray
@@ -134,16 +135,38 @@ FUSED_COLUMNS = int(os.environ.get("IRON_FUSED_COLUMNS", "4"))
 # running scale crosses between a step's two halves through the memory the tiles already
 # share, so each core needs its partner directly above or below it and no other. Rows
 # 1 and 2 against 0 and 3 is the one split of four rows where that holds both ways.
-_DEFAULT_ROWS = "12|03" if FUSED_KERNEL else "0|1|2"
-FUSED_ROWS = dict(
-    zip(
-        [*SCORE_LAYERS, CONTEXT_NODE],
-        (
-            tuple(int(c) for c in field)
-            for field in os.environ.get("IRON_FUSED_ROWS", _DEFAULT_ROWS).split("|")
-        ),
+# The softmax costs several times what the stages either side of it do, measured, so given
+# enough query blocks to fill them it takes two of the four rows and they take one each.
+_WIDE_SOFTMAX_ROWS = "0|13|2"
+
+
+def _default_rows(seq_len: int, flash: bool) -> str:
+    if FUSED_KERNEL:
+        return "12|03"
+    if flash and not seq_len % (FLASH_QUERY * FUSED_COLUMNS * 2):
+        return _WIDE_SOFTMAX_ROWS
+    return "0|1|2"
+
+
+def fused_rows(seq_len: int = 0, flash: bool = False) -> dict:
+    """Which rows of a column each fused layer sits on."""
+    spec = os.environ.get("IRON_FUSED_ROWS", _default_rows(seq_len, flash))
+    return dict(
+        zip(
+            [*SCORE_LAYERS, CONTEXT_NODE],
+            (tuple(int(c) for c in field) for field in spec.split("|")),
+        )
     )
-)
+# What each kernel measures against what its loop nest says it costs, from a hardware trace.
+# The softmax is the one that matters: it passes over its block several times calling exp on
+# every element, which an operation count prices as a copy.
+COST_SCALE = {
+    SCORES_NODE: 0.22,
+    SOFTMAX_NODE: 78.5,
+    CONTEXT_NODE: 0.89,
+    SCORE_SOFTMAX_NODE: 3.14,
+}
+
 # Query positions a fused GEMM works at a time. The head's whole key or value sits on the
 # core beside them -- 32 KB of a 64 KB core at seq_len 256 -- so the tile is what is left.
 FUSED_QUERY_TILE = 16
@@ -157,16 +180,16 @@ def array() -> ComputeArray:
     return ComputeArray.from_device(aie_utils.get_current_device())
 
 
-def query_split(k):
+def query_split(k, seq_len=0, flash=False):
     """How many cores the query dimension splits over: a column's rows while each layer
     has the column to itself, the columns once the three layers take a row each."""
     if k != 1:
         return array().num_rows
-    return FUSED_COLUMNS * max(len(rows) for rows in FUSED_ROWS.values())
+    return FUSED_COLUMNS * max(len(rows) for rows in fused_rows(seq_len, flash).values())
 
 
-def query_per_core(seq_len, k):
-    return seq_len // query_split(k)
+def query_per_core(seq_len, k, flash=False):
+    return seq_len // query_split(k, seq_len, flash)
 
 
 def query_tile(seq_len, k, flash=False):
@@ -250,6 +273,7 @@ def _placements(seq_len, d_head, k, causal, flash=False):
         # query attends a suffix of it and the kernel drops that suffix before it reduces.
         softmax["causal"] = True
     if k == 1:
+        rows = fused_rows(seq_len, flash)
         columns = grid.all_columns[:FUSED_COLUMNS]
         if FUSED_KERNEL:
             # The mask lives inside the fused kernel, the way it already does inside the
@@ -259,19 +283,27 @@ def _placements(seq_len, d_head, k, causal, flash=False):
                 CONTEXT_NODE: gemm(*tiles[CONTEXT_NODE]) | {"flash": True},
             }
         else:
+            # Wider than the layer it feeds, the softmax hands its block straight to those
+            # cores: no memory tile in that handover to re-lay it out, so the kernel leaves
+            # it in the tiling the accumulation reads.
+            handing_over = len(rows[SOFTMAX_NODE]) > len(rows[CONTEXT_NODE])
             kwargs = {
                 SCORES_NODE: gemm(*tiles[SCORES_NODE])
                 | ({"causal": True} if flash else {}),
-                SOFTMAX_NODE: softmax,
+                SOFTMAX_NODE: softmax | ({"tiled_out": True} if handing_over else {}),
                 CONTEXT_NODE: gemm(*tiles[CONTEXT_NODE])
                 | ({"flash": True} if flash else {}),
             }
         return {
             layer: Placement(
                 columns,
-                (("D0", FUSED_COLUMNS * len(FUSED_ROWS[layer])),),
+                (("D0", FUSED_COLUMNS * len(rows[layer])),),
                 kw,
-                rows=FUSED_ROWS[layer],
+                rows=rows[layer],
+                # These layers hand to one another core to core, so a layer on several rows
+                # has to keep its cores in the column of the core it hands to.
+                by_row=True,
+                cost_scale=COST_SCALE.get(layer, 1.0),
             )
             for layer, kw in kwargs.items()
         }
@@ -280,24 +312,27 @@ def _placements(seq_len, d_head, k, causal, flash=False):
             grid.all_columns[:GEMM_COLUMNS],
             split(GEMM_COLUMNS),
             gemm(*tiles[SCORES_NODE]),
+            cost_scale=COST_SCALE[SCORES_NODE],
         ),
         SOFTMAX_NODE: Placement(
             (SOFTMAX_COLUMN,),
             (("D0", len(SOFTMAX_CORES)),),
             softmax,
             rows=SOFTMAX_CORES,
+            cost_scale=COST_SCALE[SOFTMAX_NODE],
         ),
         CONTEXT_NODE: Placement(
             grid.all_columns[: _context_columns(d_head)],
             split(_context_columns(d_head)),
             gemm(*tiles[CONTEXT_NODE]),
+            cost_scale=COST_SCALE[CONTEXT_NODE],
         ),
     }
 
 
 def _layer_tiling(layer, seq_len, d_head, k, flash=False):
     """Each of the layer's dimensions, as (dim, tile, the extent one core holds)."""
-    query = query_per_core(seq_len, k)
+    query = query_per_core(seq_len, k, flash)
     if layer in (SCORES_NODE, SCORE_SOFTMAX_NODE):
         rows, contraction, key = _scores_tile(seq_len, d_head, k, flash)
         return [
@@ -460,8 +495,10 @@ def _experiment_id(seq_len, d_head, k, causal, flash):
         suffix += f"_c{FUSED_COLUMNS}"
         if flash and FLASH_QUERY != FLASH_BLOCK:
             suffix += f"_q{FLASH_QUERY}"
-        rows = os.environ.get("IRON_FUSED_ROWS", _DEFAULT_ROWS)
-        suffix += "_r" + rows.replace("|", "_")
+        spec = "".join(
+            "|" + "".join(str(r) for r in rs) for rs in fused_rows(seq_len, flash).values()
+        )
+        suffix += "_r" + spec.lstrip("|").replace("|", "_")
         # Fusing the score side is a different graph, not just a different placement.
         if FUSED_KERNEL:
             suffix += "_fused"
@@ -475,6 +512,9 @@ def _experiment_id(seq_len, d_head, k, causal, flash):
         suffix += "_causal"
     if trace_size():
         suffix += "_traced"
+        # Which tiles are traced changes the design, so it belongs in the id.
+        for col, row in trace_tile_list():
+            suffix += f"_{col}x{row}"
     return (
         f"{hardware}-mha{suffix}_{seq_len}_{d_head}"
         f"-{grid.num_rows}_row_{grid.num_columns}_col-{stream_revision()}"
@@ -502,6 +542,7 @@ def _run_codegen(seq_len, d_head, npu, k, causal, flash):
         enable_codegen=True,
         trace_size=trace_size(),
         trace_max_tiles=trace_tiles(),
+        trace_tiles=trace_tile_list(),
         # One head occupies one column, so a wider search only enlarges the
         # memory-tile path enumeration the solver has to walk.
         nb_cols_to_use=COLUMNS_IN_USE,

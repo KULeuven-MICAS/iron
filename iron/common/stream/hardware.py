@@ -61,15 +61,26 @@ class ComputeArray:
         return tuple(range(self.num_columns))
 
     def cores(
-        self, columns: Iterable[int], rows: Sequence[int] | None = None
+        self,
+        columns: Iterable[int],
+        rows: Sequence[int] | None = None,
+        by_row: bool = False,
     ) -> tuple[int, ...]:
-        """The core ids of ``columns``, column by column and row by row.
+        """The core ids of ``columns``, column by column and row by row by default.
 
         ``rows`` takes only some rows of each column, for a layer that wants the
         array's width but not its full depth -- an elementwise layer with one
         worker per column, as IRON's own channeled operators place it.
+
+        ``by_row`` walks the rows outermost instead. A layer wider than the one it feeds
+        needs that: its cores for a given consumer then sit in that consumer's own column,
+        near enough to share memory rather than spend a DMA channel.
         """
         selected = range(self.num_rows) if rows is None else rows
+        if by_row:
+            return tuple(
+                self.columns[column][row] for row in selected for column in columns
+            )
         return tuple(
             self.columns[column][row] for column in columns for row in selected
         )

@@ -96,14 +96,18 @@ def softmax_layouts(n: int) -> tuple[TiledStridedLayout, ...]:
 # The one block shape mha.cc's flash kernels are written for.
 FLASH_TILE = 64
 
-
-def flash_layouts() -> tuple[TiledStridedLayout, ...]:
+def flash_layouts(
+    tiled_in: bool = False, tiled_out: bool = False
+) -> tuple[TiledStridedLayout, ...]:
     """Layouts of the online softmax's score and probability blocks.
 
-    Row major, since the kernel walks a row at a time, but spelled over the MAC tile
-    of the GEMM either side of it so the transform between them lines up.
+    Row major on a side that reaches a memory tile, since the kernel walks a row at a time
+    and the tile lays the block out for nothing. The GEMM's own tiling on a side that meets
+    another core directly, where nothing else can.
     """
-    return (contiguous_tiled_2d(FLASH_TILE, FLASH_TILE, MAC_ROWS_BFP16, T),) * 2
+    contiguous = contiguous_tiled_2d(FLASH_TILE, FLASH_TILE, MAC_ROWS_BFP16, T)
+    mac = tiled_2d(FLASH_TILE, FLASH_TILE, MAC_ROWS_BFP16, T)
+    return (mac if tiled_in else contiguous, mac if tiled_out else contiguous)
 
 
 def _mha_artifacts(base_dir, kernel_dir):
@@ -233,26 +237,9 @@ SOFTMAX = StreamKernel(
     key="softmax", layouts=softmax_layouts, source="softmax", only_on="aie2p"
 )
 
-def fused_score_softmax_layouts(
-    m: int, k: int, n: int, bfp16_mmul: bool = False
-) -> tuple[TiledStridedLayout, ...]:
-    """Layouts of the fused score GEMM's ``Q``, ``k_t`` and probability block.
-
-    The operands as the GEMM takes them, but the block leaves row major rather than
-    MAC tiled: that is the layout the online softmax behind it reads, and having the
-    GEMM write it directly is what lets the two share a core.
-    """
-    rows = mac_rows(bfp16_mmul)
-    return (
-        tiled_2d(m, k, rows, S),
-        tiled_2d(k, n, S, T),
-        contiguous_tiled_2d(m, n, rows, T),
-    )
-
-
 # mha.cc's flash kernels, both halves of an online-softmax step, live in one object.
 FLASH = StreamKernel(
-    key="partial_softmax",
+    key="partial_softmax_mode",
     layouts=flash_layouts,
     artifacts=_mha_artifacts,
     only_on="aie2p",
@@ -260,9 +247,11 @@ FLASH = StreamKernel(
 
 # The score GEMM and the online softmax as one node, so two fused layers cover the
 # four rows that three layers leave one of idle.
+# The fused step takes and leaves its operands in a GEMM's own tilings: the softmax reads
+# and writes the block a row at a time out of the MAC tiles, so nothing re-lays it out.
 FUSED_SCORE_SOFTMAX = StreamKernel(
     key="matmul_softmax",
-    layouts=fused_score_softmax_layouts,
+    layouts=gemm_layouts,
     artifacts=_mha_artifacts,
     only_on="aie2p",
 )

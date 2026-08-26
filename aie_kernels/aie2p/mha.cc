@@ -21,6 +21,10 @@
 // Rows and columns of the MAC tile mm.cc stores its result in.
 #define MAC_TILE 8
 
+// Which sides of the softmax are in the GEMM's own tiling rather than row major.
+#define TILED_IN 1
+#define TILED_OUT 2
+
 #define ROUNDING_MODE aie::rounding_mode::conv_even
 
 // Row-major variants needed by matmul_PV.  Because there is no separate link
@@ -198,6 +202,22 @@ static inline void gather_group(const bfloat16 *A,
     }
 }
 
+static inline void scatter_group(const bfloat16 *rows,
+                                 bfloat16 *P,
+                                 int32_t B_kv,
+                                 int32_t first,
+                                 int32_t valid_q_rows)
+{
+    const int32_t tile = MAC_TILE * MAC_TILE;
+    bfloat16 *base = P + (first / MAC_TILE) * tile * (B_kv / MAC_TILE);
+    for (int32_t k = 0; k < MAC_TILE && first + k < valid_q_rows; k++) {
+        const bfloat16 *row = rows + k * B_kv;
+        for (int32_t jt = 0; jt < B_kv / MAC_TILE; jt++) {
+            aie::store_v(base + jt * tile + k * MAC_TILE, aie::load_v<MAC_TILE>(row + jt * MAC_TILE));
+        }
+    }
+}
+
 static void partial_softmax_body(bfloat16 *A,
                                  bfloat16 *P,
                                  bfloat16 *scale_buffer,
@@ -241,7 +261,7 @@ static void partial_softmax_body(bfloat16 *A,
         return;
     }
 
-    if (!tiled) {
+    if (!(tiled & TILED_IN)) {
         // Tail mask: invalidate padded Q rows
         if (valid_q_rows < B_q) {
             using Vec64bf16 = aie::vector<bfloat16, VECTOR_LENGTH>;
@@ -295,12 +315,20 @@ static void partial_softmax_body(bfloat16 *A,
     if (tiled) {
         // One group of rows in flight, which is 1 KB rather than a second block.
         alignas(64) static bfloat16 rows[MAC_TILE * VECTOR_LENGTH];
+        alignas(64) static bfloat16 probs[MAC_TILE * VECTOR_LENGTH];
         const int32_t diagonal = kv_block_idx == q_block_idx;
         for (int32_t first = 0; first < valid_q_rows; first += MAC_TILE) {
-            gather_group(A, rows, B_kv, first, valid_q_rows, valid_kv_cols, diagonal);
+            bfloat16 *in = A + B_kv * first;
+            if (tiled & TILED_IN) {
+                gather_group(A, rows, B_kv, first, valid_q_rows, valid_kv_cols, diagonal);
+                in = rows;
+            }
+            bfloat16 *out = (tiled & TILED_OUT) ? probs : P + B_kv * first;
             for (int32_t k = 0; k < MAC_TILE && first + k < valid_q_rows; k++) {
-                partial_softmax_bf16(rows + B_kv * k, P + B_kv * (first + k), scale_buffer, B_kv, first + k, B_q,
-                                     inv_scale);
+                partial_softmax_bf16(in + B_kv * k, out + B_kv * k, scale_buffer, B_kv, first + k, B_q, inv_scale);
+            }
+            if (tiled & TILED_OUT) {
+                scatter_group(probs, P, B_kv, first, valid_q_rows);
             }
         }
     } else {
@@ -360,6 +388,23 @@ void partial_softmax(bfloat16 *A,
     partial_softmax_body(A, P, scale_buffer, idx_buffer, inv_scale, B_q, B_kv, S_q_eff, S_kv_eff, 0);
 }
 
+// The same step, told which of its sides are MAC tiled. A handover straight to the core
+// beside it has no memory tile in between to re-lay the block out, so the kernel does it.
+void partial_softmax_mode(bfloat16 *A,
+                          bfloat16 *P,
+                          bfloat16 *scale_buffer,
+                          int32_t *idx_buffer,
+                          bfloat16 inv_scale,
+                          int32_t B_q,
+                          int32_t B_kv,
+                          int32_t S_q_eff,
+                          int32_t S_kv_eff,
+                          int32_t tiled)
+{
+    partial_softmax_body(A, P, scale_buffer, idx_buffer, inv_scale, B_q, B_kv, S_q_eff, S_kv_eff,
+                         tiled);
+}
+
 // One online-softmax step whole: the score GEMM straight into the probability block, and
 // the softmax over it without the block leaving the core. Two layouts come with that: the
 // key is row major here, the way the score GEMM's own object is compiled and unlike the
@@ -398,7 +443,8 @@ void matmul_softmax(bfloat16 *Q,
                                /*b_row_maj=*/true,
                                /*c_row_maj=*/true>(Q, K, P);
 
-    partial_softmax_body(P, P, scale_buffer, idx_buffer, inv_scale, B_q, B_kv, S_q_eff, S_kv_eff, 1);
+    partial_softmax_body(P, P, scale_buffer, idx_buffer, inv_scale, B_q, B_kv, S_q_eff, S_kv_eff,
+                         TILED_IN | TILED_OUT);
 }
 
 void init_scale_buffer(bfloat16 *scale_buffer, int32_t size)

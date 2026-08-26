@@ -41,6 +41,12 @@ class Placement:
     splits: Sequence[tuple[str, int]] = ()
     kernel_kwargs: dict = field(default_factory=dict)
     rows: Sequence[int] | None = None
+    # Order this layer's cores row by row rather than column by column, so a layer wider
+    # than the one it feeds keeps its cores in that consumer's column. See ComputeArray.cores.
+    by_row: bool = False
+    # What this layer's analytical cost has to be multiplied by to match hardware, as
+    # measured by a trace. One leaves the model as it was.
+    cost_scale: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -100,11 +106,14 @@ def _layer_entry(
 ) -> dict:
     return {
         "name": name,
-        "core_allocation": [list(array.cores(placement.columns, placement.rows))],
+        "core_allocation": [
+            list(array.cores(placement.columns, placement.rows, placement.by_row))
+        ],
         "inter_core_tiling": [
             [{"dim": dim, "split": split} for dim, split in placement.splits]
         ],
         "kernel": {"name": kernel_key, "kwargs": dict(placement.kernel_kwargs)},
+        "cost_scale": placement.cost_scale,
     }
 
 

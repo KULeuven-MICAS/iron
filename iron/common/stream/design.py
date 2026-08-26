@@ -126,3 +126,19 @@ def trace_size() -> int:
 def trace_tiles() -> int:
     """How many tiles to trace. Routing, not the packet id space, is the real limit."""
     return int(os.environ.get("IRON_TRACE_NTILES", "4"))
+
+
+def trace_tile_list() -> tuple[tuple[int, int], ...]:
+    """Which tiles to trace, as ``IRON_TRACE_TILES="col,row;col,row"``.
+
+    Unset takes the first tiles in walk order, which are whichever the design happens to
+    emit first -- rarely the producer and consumer pair worth comparing.
+    """
+    spec = os.environ.get("IRON_TRACE_TILES", "").strip()
+    if not spec:
+        return ()
+    return tuple(
+        tuple(int(part) for part in entry.split(","))
+        for entry in spec.split(";")
+        if entry
+    )
