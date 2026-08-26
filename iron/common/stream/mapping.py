@@ -113,7 +113,9 @@ def _layer_entry(
             [{"dim": dim, "split": split} for dim, split in placement.splits]
         ],
         "kernel": {"name": kernel_key, "kwargs": dict(placement.kernel_kwargs)},
-        "cost_scale": placement.cost_scale,
+        # Only when it says something: an entry a stream release does not know the key for
+        # is one it has to reject, and an uncalibrated layer has nothing to tell it.
+        **({"cost_scale": placement.cost_scale} if placement.cost_scale != 1.0 else {}),
     }
 
 

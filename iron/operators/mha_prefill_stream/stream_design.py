@@ -157,16 +157,6 @@ def fused_rows(seq_len: int = 0, flash: bool = False) -> dict:
             (tuple(int(c) for c in field) for field in spec.split("|")),
         )
     )
-# What each kernel measures against what its loop nest says it costs, from a hardware trace.
-# The softmax is the one that matters: it passes over its block several times calling exp on
-# every element, which an operation count prices as a copy.
-COST_SCALE = {
-    SCORES_NODE: 0.22,
-    SOFTMAX_NODE: 78.5,
-    CONTEXT_NODE: 0.89,
-    SCORE_SOFTMAX_NODE: 3.14,
-}
-
 # Query positions a fused GEMM works at a time. The head's whole key or value sits on the
 # core beside them -- 32 KB of a 64 KB core at seq_len 256 -- so the tile is what is left.
 FUSED_QUERY_TILE = 16
@@ -303,7 +293,6 @@ def _placements(seq_len, d_head, k, causal, flash=False):
                 # These layers hand to one another core to core, so a layer on several rows
                 # has to keep its cores in the column of the core it hands to.
                 by_row=True,
-                cost_scale=COST_SCALE.get(layer, 1.0),
             )
             for layer, kw in kwargs.items()
         }
@@ -312,20 +301,17 @@ def _placements(seq_len, d_head, k, causal, flash=False):
             grid.all_columns[:GEMM_COLUMNS],
             split(GEMM_COLUMNS),
             gemm(*tiles[SCORES_NODE]),
-            cost_scale=COST_SCALE[SCORES_NODE],
         ),
         SOFTMAX_NODE: Placement(
             (SOFTMAX_COLUMN,),
             (("D0", len(SOFTMAX_CORES)),),
             softmax,
             rows=SOFTMAX_CORES,
-            cost_scale=COST_SCALE[SOFTMAX_NODE],
         ),
         CONTEXT_NODE: Placement(
             grid.all_columns[: _context_columns(d_head)],
             split(_context_columns(d_head)),
             gemm(*tiles[CONTEXT_NODE]),
-            cost_scale=COST_SCALE[CONTEXT_NODE],
         ),
     }
 
