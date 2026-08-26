@@ -35,7 +35,7 @@ from iron.common.stream.design import (
     trace_size,
     trace_tiles,
 )
-from iron.common.stream.hardware import ComputeArray
+from iron.common.stream.hardware import array
 from iron.common.stream.mapping import (
     FusedGroup,
     Placement,
@@ -109,14 +109,6 @@ def gemm_tiles(k):
         UP: (sequence, embedding, hidden),
         DOWN: (sequence, hidden, embedding),
     }
-
-
-@lru_cache(maxsize=None)
-def array() -> ComputeArray:
-    """The compute grid of the device being built for."""
-    import aie.utils as aie_utils
-
-    return ComputeArray.from_device(aie_utils.get_current_device())
 
 
 def _placements(k, hidden_dim):

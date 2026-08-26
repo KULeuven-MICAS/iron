@@ -117,8 +117,7 @@ def _mha_artifacts(base_dir, kernel_dir):
     mha.cc includes mm.cc and softmax.cc, so one translation unit holds the partial
     softmax, the value accumulation and the rescale, and both cores of a step link
     against it. Its matmuls are compiled for the 64x64x64 block the kernels hard-code.
-    Beside it, the vectorized copy that takes a snapshot of the running scale off the
-    softmax core, built exactly as ``iron/operators/mha`` builds it.
+    Beside it, the vectorized copy that snapshots the running scale off the softmax core.
     """
     from iron.common.compilation import KernelObjectArtifact, SourceArtifact
 

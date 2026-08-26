@@ -4,13 +4,9 @@
 """Reference attention core for one head: ``softmax(q @ k_t) @ v``.
 
 Running this module produces the golden output; exporting it produces the workload
-stream-dse generates the design from. The block is the part of prefill attention that
-runs on the host today -- the projections around it stay on IRON's own GEMM.
-
-Two things the caller does rather than the graph. ``k_t`` arrives transposed, because
-an ONNX ``Transpose`` is a layout node that cuts the fusion group and the generated
-design has no operand transform to undo it. And the ``1/sqrt(d_head)`` factor is
-folded into ``q``, which is exact and saves an elementwise pass over the scores.
+stream-dse generates the design from. Two things the caller does rather than the graph:
+``k_t`` arrives transposed and the ``1/sqrt(d_head)`` factor comes folded into ``q``.
+``README.md`` says why.
 
 The names below are the block's vocabulary. Everything downstream is named from here:
 the ONNX tensors, the mapping's layers and runtime arguments, and the runtime buffers.
@@ -46,15 +42,14 @@ FUSED_RESULT_NAMES = {SCORE_SOFTMAX_NODE: PROBABILITIES, CONTEXT_NODE: CONTEXT}
 class AttentionCore(nn.Module):
     """One head's scores, softmax and context, over a pre-scaled ``q``.
 
-    ``causal`` masks every key at a later position than its query, which is what prefill
-    computes; the mask is additive so it survives the export as an ordinary operand.
+    ``causal`` masks every key at a later position than its query; the mask is additive,
+    so it survives the export as an ordinary operand.
 
-    ``flash`` writes the same computation as one online-softmax step per key block. The
-    mask, the running maximum and sum, and the final normalisation are all inside that
-    step, so the graph loses both the mask operand and the reduction over the key -- and
-    with it the reason the key had to stay resident. It is the shape the design is
-    generated from, not the one the golden output is taken from: run this and the
-    probabilities come out unnormalised, exactly as they leave the kernel.
+    ``flash`` writes the same computation as one online-softmax step per key block, whose
+    mask, running maximum and sum and final normalisation are all the kernel's own: the
+    graph then loses the reduction over the key, and with it the reason the key had to
+    stay resident. It is the shape the design is generated from, not the one the golden
+    output is taken from -- run this and the probabilities come out unnormalised.
     """
 
     def __init__(self, causal: bool = False, flash: bool = False, fused: bool = False):

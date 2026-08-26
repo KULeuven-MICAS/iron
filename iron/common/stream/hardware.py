@@ -18,6 +18,7 @@ array asks :meth:`ComputeArray.allocate` for a column budget per layer.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Iterable, Sequence
 
 from aie.iron.device.device import AIETileType
@@ -101,3 +102,11 @@ class ComputeArray:
             ranges.append(tuple(range(first, first + budget)))
             first += budget
         return tuple(ranges)
+
+
+@lru_cache(maxsize=None)
+def array() -> ComputeArray:
+    """The compute grid of the device being built for."""
+    import aie.utils as aie_utils
+
+    return ComputeArray.from_device(aie_utils.get_current_device())

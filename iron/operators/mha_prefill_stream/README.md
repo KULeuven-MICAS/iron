@@ -112,10 +112,9 @@ row spends both on that block and on the value.
 - **Four columns.** Widening the fused design costs more to configure than it saves in
   compute: at eight columns one head takes 318 us against 244 us at four. Two columns is
   faster below three heads and slower above them.
-- **Sequence length is bounded by memory-tile capacity.** Key and value stay whole, so
-  `2 * seq_len * d_head * 2` bytes must fit a 256 KB memory tile, and the fused score
-  core has to hold the whole key beside its own tiles, which caps it at 320 positions.
-  `_check_shapes` rejects the rest up front.
+- **Sequence length is bounded by what stays resident.** The fused score core holds the
+  whole key beside its own tiles, which `_check_shapes` caps at 320 positions up front;
+  beyond that stream-dse's allocation reports the tile that overflows and by how much.
 
 `flash=True` removes the last of these; it does not move the first two, since the query
 is still the only dimension a core may split. Its own limits are that `d_head` must be 64

@@ -96,14 +96,15 @@ def design_findings(mlir: str, objects: Collection[str] | None = None) -> list[s
     return findings
 
 
-# Implementation details that belong to iron.common.stream.design, and the helper each
-# one shows was copied rather than imported.
+# Implementation details that belong to iron.common.stream, and the helper each one
+# shows was copied rather than imported.
 COPIED_PLUMBING = {
     "mlir_mod_ctx": "region_module",
     "hashlib": "digest",
     "IRON_TRACE_SIZE": "trace_size",
     "IRON_TRACE_NTILES": "trace_tiles",
     "final.mlir": "design_paths",
+    "get_current_device": "array",
     r"func\.func\s+private": "prefixed",
 }
 
@@ -114,7 +115,7 @@ def test_design_module_imports_the_shared_helpers(operator):
     copied = sorted({h for marker, h in COPIED_PLUMBING.items() if marker in source})
     assert not copied, (
         f"{operator}/stream_design.py reimplements {copied}; "
-        "import them from iron.common.stream.design"
+        "import them from iron.common.stream"
     )
 
 
@@ -149,16 +150,38 @@ def test_generated_group_resolves_its_kernels(design, dims, k, index):
     assert design_findings(mlir) == []
 
 
-def test_the_fused_score_kernel_maps_onto_its_cores(monkeypatch, tmp_path):
-    """The fused score-and-softmax node is reachable only through IRON_FUSED_KERNEL, so
-    the cases above generate the three-layer design and never this one."""
-    monkeypatch.setattr(mha, "FUSED_KERNEL", True)
-    monkeypatch.setattr(mha, "SCORE_LAYERS", [mha.SCORE_SOFTMAX_NODE])
-    monkeypatch.setattr(mha, "workload_for", mha.workload_for.__wrapped__)
-    monkeypatch.setitem(
-        mha.GROUP_LAYERS, 1, [[mha.SCORE_SOFTMAX_NODE, mha.CONTEXT_NODE]]
+def test_a_design_config_reads_the_environment_it_is_not_given(monkeypatch):
+    """The sweep hooks are the config's defaults, so a harness that sets the environment
+    and passes no config still gets the design it asks for."""
+    monkeypatch.setenv("IRON_FUSED_COLUMNS", "2")
+    monkeypatch.setenv("IRON_FUSED_ROWS", "0|13|2")
+    cfg = mha.DesignConfig.from_environment()
+    assert (cfg.fused_columns, cfg.fused_rows) == (2, "0|13|2")
+    assert mha.DesignConfig() == mha.DesignConfig(flash_query=64, fused_columns=4)
+
+
+def test_two_configs_give_two_designs_in_one_process(tmp_path):
+    """A config is a value the operator carries, not module state: neither of these
+    fixes the other, which constants read from the environment at import could not."""
+    mappings = []
+    for columns in (2, 4):
+        cfg = mha.DesignConfig(fused_columns=columns)
+        _, path = mha.build_inputs(
+            256, 64, output_dir=str(tmp_path / f"c{columns}"), k=1, flash=True, cfg=cfg
+        )
+        assert group_findings(yaml.safe_load(Path(path).read_text()), 0) == []
+        mappings.append(Path(path).read_text())
+    assert mappings[0] != mappings[1]
+
+
+def test_the_fused_score_kernel_maps_onto_its_cores(tmp_path):
+    """The fused score-and-softmax node is only reachable through a design config that
+    asks for it, so the cases above generate the three-layer design, never this one."""
+    cfg = mha.DesignConfig(fused_kernel=True)
+    assert mha.group_layers(1, cfg) == [[mha.SCORE_SOFTMAX_NODE, mha.CONTEXT_NODE]]
+    _, path = mha.build_inputs(
+        256, 64, output_dir=str(tmp_path), k=1, flash=True, cfg=cfg
     )
-    _, path = mha.build_inputs(256, 64, output_dir=str(tmp_path), k=1, flash=True)
     mapping = yaml.safe_load(Path(path).read_text())
     kernels = {layer["name"]: layer["kernel"]["name"] for layer in mapping["layers"]}
     assert kernels[mha.SCORE_SOFTMAX_NODE] == "matmul_softmax"
