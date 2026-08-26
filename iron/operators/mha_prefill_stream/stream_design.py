@@ -534,7 +534,9 @@ def _experiment_id(seq_len, d_head, k, causal, flash, cfg=None):
     elif causal:
         suffix += "_causal"
     if trace_size():
-        suffix += "_traced"
+        # The buffer size is compiled into the runtime sequence, so a design
+        # generated for one size cannot serve another.
+        suffix += f"_traced{trace_size()}"
         # Which tiles are traced changes the design, so it belongs in the id.
         for col, row in trace_tile_list():
             suffix += f"_{col}x{row}"

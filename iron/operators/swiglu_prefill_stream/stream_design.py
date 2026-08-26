@@ -277,7 +277,9 @@ def _experiment_id(seq_len, embedding_dim, hidden_dim, k):
     hardware = os.path.splitext(os.path.basename(ACCELERATOR))[0]
     suffix = f"_k{k}" if k > 1 else ""
     if trace_size():
-        suffix += "_traced"
+        # The buffer size is compiled into the runtime sequence, so a design
+        # generated for one size cannot serve another.
+        suffix += f"_traced{trace_size()}"
     return (
         f"{hardware}-swiglu{suffix}_{seq_len}_{embedding_dim}_{hidden_dim}"
         f"-{grid.num_rows}_row_{grid.num_columns}_col-{stream_revision()}"
