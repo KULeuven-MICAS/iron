@@ -114,6 +114,7 @@ def dma_findings(mlir: str) -> list[str]:
     and one on each consumer.
     """
     tiles = {f"%{m[1]}": (int(m[2]), int(m[3])) for m in _TILE.finditer(mlir)}
+    seen = 0
     incoming: dict[tuple[int, int], int] = {}
     outgoing: dict[tuple[int, int], int] = {}
     for line in mlir.splitlines():
@@ -124,6 +125,7 @@ def dma_findings(mlir: str) -> list[str]:
         reached = [c for c in re.findall(r"%\d+", consumers) if c in tiles]
         if producer not in tiles or not reached:
             continue
+        seen += 1
         source = tiles[producer]
         transformed = "dimensionsToStream" in between or "dimensionsFromStream" in line
         if (
@@ -135,7 +137,11 @@ def dma_findings(mlir: str) -> list[str]:
         outgoing[source] = outgoing.get(source, 0) + 1
         for consumer in reached:
             incoming[tiles[consumer]] = incoming.get(tiles[consumer], 0) + 1
-    findings = []
+    # A design with no fifo at all means the syntax moved under this check, not that
+    # the design is clean: without this it reports nothing and the assert passes.
+    findings = (
+        [] if seen else ["no object fifos found; this check no longer reads the IR"]
+    )
     for tile in sorted(set(incoming) | set(outgoing)):
         limit = DMA_CHANNELS.get(tile[1], COMPUTE_DMA_CHANNELS)
         for direction, spent in (
