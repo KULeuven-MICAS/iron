@@ -2,15 +2,12 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from snaxc.ir.tsl import Stride, TiledStride, TiledStridedLayout
-from xdsl.dialects.builtin import (
-    AnyDenseElement,
-    FunctionType,
-)
+from xdsl.dialects.builtin import FunctionType
 from xdsl.dialects.func import CallOp
 from xdsl.irdl import Operation
 
 from stream.compiler.dialects.stream import ComputationNodeOp
-from stream.compiler.kernels.aie_kernel import MAC_ROWS_BFP16, AIEKernelWithZeroing
+from stream.compiler.kernels.aie_kernel import AIEKernelWithZeroing
 
 
 # TODO
@@ -22,7 +19,6 @@ class SwigluFrontFusedKernel(AIEKernelWithZeroing):
 
     @property
     def zero_name(self) -> str:
-        # TODO actually write this kernel
         return f"swiglu_fused_zero_{self.m}_{self.k}_{self.n}"
 
     def zero_type(self, op: ComputationNodeOp) -> FunctionType:
@@ -30,8 +26,7 @@ class SwigluFrontFusedKernel(AIEKernelWithZeroing):
 
     @property
     def linkwith_name(self) -> str:
-        # TODO actually write this kernel
-        return f"swiglu_fused_core_{self.m}_{self.k}_{self.n}"
+        return f"swiglu_fused_core_{self.m}_{self.k}_{self.n}.o"
 
     @property
     def function_name(self) -> str:

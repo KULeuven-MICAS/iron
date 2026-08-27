@@ -14,12 +14,18 @@ pytest.importorskip(
     "stream", reason="stream-dse not installed (see requirements_stream.txt)"
 )
 
-from iron.operators.swiglu_prefill_stream_front_fused.op import SwiGLUPrefillStreamFrontFused
+from iron.operators.swiglu_prefill_stream_front_fused.op import (
+    SwiGLUPrefillStreamFrontFused,
+)
 
 # The operator's design is generated from this module; the values it is checked
 # against come from swiglu_decode's reference, which it shares.
 from iron.operators.swiglu_decode.reference import generate_golden_reference
-from iron.operators.swiglu_prefill_stream_front_fused.reference import NAME_INPUT, NAME_OUTPUT, NAME_WEIGHTS
+from iron.operators.swiglu_prefill_stream_front_fused.reference import (
+    NAME_INPUT,
+    NAME_OUTPUT,
+    NAME_WEIGHTS,
+)
 from iron.common.test_utils import verify_buffer
 
 # The MILP-feasible shape on the whole-array Strix (npu2) target.
@@ -28,16 +34,22 @@ SEQ_LEN, EMBEDDING_DIM, HIDDEN_DIM = 256, 512, 2048
 # Timed dispatches per test; the reported latency is the fastest of them.
 TIMED_RUNS = 3
 
+
 def _staged(operator, golden_ref):
     """A callable with its inputs staged.
 
-    Inputs are named by the golden reference, and the design consumes the weights in
-    their natural (K, N) layout.
+    Inputs are named by the golden reference, and the design consumes gate/up weights
+    packed along their new middle dimension.
     """
     run = operator.get_callable()
-    for name in (NAME_INPUT, *NAME_WEIGHTS):
+    values = {
+        NAME_INPUT: golden_ref[NAME_INPUT],
+        "w_front": torch.stack((golden_ref["w_gate"], golden_ref["w_up"]), dim=1),
+        "w_down": golden_ref["w_down"],
+    }
+    for name in NAME_WEIGHTS:
         buffer = run.get_buffer(name)
-        buffer.torch_view()[:] = golden_ref[name].to(torch.bfloat16).flatten()
+        buffer.torch_view()[:] = values[name].to(torch.bfloat16).flatten()
         buffer.to("npu")
     return run
 
@@ -57,10 +69,6 @@ def test_swiglu_prefill_stream_front_fused(aie_context):
     )
     operator.compile()
 
-    # The whole block is computed in bf16, so rounding accumulates and reorders
-    # across the chain and the K=hidden_dim down-projection sum (near-cancellation
-    # amplifies relative error): ~20% of elements drift past the 8% bound, so allow
-    # up to 25%. Tolerances are local to this test.
     run = _staged(operator, golden_ref)
     run()
     output = run.get_buffer(NAME_OUTPUT).to_torch().reshape((SEQ_LEN, EMBEDDING_DIM))

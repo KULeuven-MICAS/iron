@@ -27,8 +27,10 @@ from onnx import defs
 from onnxscript import opset18
 from onnxscript.values import Op, Opset
 
-from iron.common.layout import TiledStridedLayout, tiled_2d
-from iron.operators.swiglu_prefill_stream_front_fused.reference import onnx_swiglu_front_fused
+from iron.common.layout import Stride, TiledStride, TiledStridedLayout, tiled_2d
+from iron.operators.swiglu_prefill_stream_front_fused.reference import (
+    onnx_swiglu_front_fused,
+)
 
 # Intrinsic MAC tile dimensions of the aie2p kernels stream-dse targets. The
 # operand layouts are the contract the generated DMAs and the compiled kernel
@@ -160,16 +162,58 @@ ELTWISE_MUL = StreamKernel(
 
 Silu = custom_op("Silu")
 
-def swiglu_fused_front_layouts(*args, **kwargs):
-    print(args, kwargs)
-    breakpoint()
-    assert False, "TODO TODO"
 
-# TODO artifacts or source?
+def swiglu_fused_front_layouts(
+    m: int, k: int, n: int, bfp16_mmul: bool = True
+) -> tuple[TiledStridedLayout, ...]:
+    rows = mac_rows(bfp16_mmul)
+    mt, kt, nt = m // rows, k // S, n // T
+    return (
+        TiledStridedLayout(
+            (
+                TiledStride((Stride(rows * S * kt, mt), Stride(S, rows))),
+                TiledStride((Stride(rows * S, kt), Stride(1, S))),
+            )
+        ),
+        TiledStridedLayout(
+            (
+                TiledStride((Stride(2 * S * T * nt, kt), Stride(T, S))),
+                TiledStride((Stride(S * T * nt, 2),)),
+                TiledStride((Stride(S * T, nt), Stride(1, T))),
+            )
+        ),
+        TiledStridedLayout(
+            (
+                TiledStride((Stride(rows * T * nt, mt), Stride(T, rows))),
+                TiledStride((Stride(rows * T, nt), Stride(1, T))),
+            )
+        ),
+    )
+
+
+def _swiglu_fused_front_artifacts(base_dir, kernel_dir, m, k, n):
+    from iron.common.compilation import KernelObjectArtifact, SourceArtifact
+
+    suffix = f"{m}_{k}_{n}"
+    return [
+        KernelObjectArtifact(
+            f"swiglu_fused_core_{suffix}.o",
+            dependencies=[
+                SourceArtifact(base_dir / "aie_kernels" / kernel_dir / "front_fused.cc")
+            ],
+            extra_flags=[f"-DDIM_M={m}", f"-DDIM_K={k}", f"-DDIM_N={n}"],
+            rename_symbols={
+                "front_fused": f"swiglu_front_fused_{suffix}",
+                "zero_front_fused": f"swiglu_fused_zero_{suffix}",
+            },
+        )
+    ]
+
+
 SWIGLU_FUSED_FRONT = StreamKernel(
     key="swiglu_fused_front",
     layouts=swiglu_fused_front_layouts,
-    source="front_fused",
+    artifacts=_swiglu_fused_front_artifacts,
 )
 
 
@@ -207,7 +251,9 @@ TORCH_OPS: dict[Callable, StreamOp] = {
     torch.ops.aten.matmul.default: StreamOp("Gemm", GEMM, _to_gemm),
     torch.ops.aten.silu.default: StreamOp("Silu", SILU, _to_silu),
     torch.ops.aten.mul.Tensor: StreamOp("Mul", ELTWISE_MUL, _to_mul),
-    torch.ops.custom.swiglu_fused_front.default: StreamOp("SwigluFrontFused", SWIGLU_FUSED_FRONT, onnx_swiglu_front_fused)
+    torch.ops.custom.swiglu_fused_front.default: StreamOp(
+        "SwigluFrontFused", SWIGLU_FUSED_FRONT, onnx_swiglu_front_fused
+    ),
 }
 
 _BY_ONNX_TYPE = {op.onnx_type: op for op in TORCH_OPS.values()}
