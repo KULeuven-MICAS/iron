@@ -53,10 +53,11 @@ class SwigluFrontFusedKernel(AIEKernelWithZeroing):
                     TiledStride([Stride(r * s, kt), Stride(1, s)]),
                 ]
             ),
-            # B: kxn, tiles of sxt
+            # B: kx2xn, gate/up matrices tiled independently as sxt
             TiledStridedLayout(
                 [
-                    TiledStride([Stride(s * t * nt, kt), Stride(t, s)]),
+                    TiledStride([Stride(2 * s * t * nt, kt), Stride(t, s)]),
+                    TiledStride([Stride(s * t * nt, 2)]),
                     TiledStride([Stride(s * t, nt), Stride(1, t)]),
                 ]
             ),
