@@ -47,7 +47,7 @@ def _staged(operator, golden_ref):
         "w_front": torch.stack((golden_ref["w_gate"], golden_ref["w_up"]), dim=1),
         "w_down": golden_ref["w_down"],
     }
-    for name in NAME_WEIGHTS:
+    for name in (NAME_INPUT, *NAME_WEIGHTS):
         buffer = run.get_buffer(name)
         buffer.torch_view()[:] = values[name].to(torch.bfloat16).flatten()
         buffer.to("npu")

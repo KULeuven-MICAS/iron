@@ -201,7 +201,12 @@ def _swiglu_fused_front_artifacts(base_dir, kernel_dir, m, k, n):
             dependencies=[
                 SourceArtifact(base_dir / "aie_kernels" / kernel_dir / "front_fused.cc")
             ],
-            extra_flags=[f"-DDIM_M={m}", f"-DDIM_K={k}", f"-DDIM_N={n}"],
+            extra_flags=[
+                f"-DDIM_M={m}",
+                f"-DDIM_K={k}",
+                f"-DDIM_N={n}",
+                "-DAIE_API_EMULATE_BFLOAT16_MMUL_WITH_BFP16",
+            ],
             rename_symbols={
                 "front_fused": f"swiglu_front_fused_{suffix}",
                 "zero_front_fused": f"swiglu_fused_zero_{suffix}",
