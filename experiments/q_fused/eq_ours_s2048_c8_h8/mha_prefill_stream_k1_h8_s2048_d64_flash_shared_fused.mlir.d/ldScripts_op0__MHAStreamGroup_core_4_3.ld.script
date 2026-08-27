@@ -1,0 +1,155 @@
+
+MEMORY
+{
+   program (RX) : ORIGIN = 0, LENGTH = 0x0020000
+   data (!RX) : ORIGIN = 0x7E400, LENGTH = 0x1C00
+}
+ENTRY(__start)
+SECTIONS
+{
+  . = 0x0;
+  .text : {
+     /* the __start symbol has to come at address zero. */
+     *crt0.o(.text*)
+     _ctors_start = .;
+     _init_array_start = .;
+     KEEP(SORT(*.init_array))
+     _ctors_end = .;
+     _init_array_end = .;
+     _dtors_start = .;
+     _dtors_end = .;
+     *(.text*)
+  } > program
+  .data : {
+     *(.data*)
+     *(.rodata*)
+  } > data
+  .comment : {
+     *(.comment*)
+  }
+  .symtab : {
+     *(.symtab)
+  }
+  .shstrtab : {
+     *(.shstrtab)
+  }
+  .strtab : {
+     *(.strtab)
+  }
+  .stack_sizes : {
+     *(.stack_sizes)
+  }
+
+. = 0x70000;
+_sp_start_value_DM_stack = .;
+. += 0x400; /* stack */
+. = 0x40400;
+of_7_join_4_0_buff_0 = .;
+. += 0x2000;
+. = 0x44000;
+of_7_join_4_0_buff_1 = .;
+. += 0x2000;
+. = 0x48000;
+of_5_broadcast_0_0_4_cons_buff_0 = .;
+. += 0x2000;
+. = 0x4C000;
+of_5_broadcast_0_0_4_cons_buff_1 = .;
+. += 0x2000;
+. = 0x42400;
+flash_index_4_2 = .;
+. += 0x8;
+. = 0x50400;
+of_6_unicast_3_buff_0 = .;
+. += 0x2000;
+. = 0x54000;
+of_6_unicast_3_buff_1 = .;
+. += 0x2000;
+. = 0x58000;
+of_4_broadcast_0_0_3_cons_buff_0 = .;
+. += 0x2000;
+. = 0x5C000;
+of_4_broadcast_0_0_3_cons_buff_1 = .;
+. += 0x2000;
+. = 0x56000;
+of_3_distribute_3_0_cons_buff_0 = .;
+. += 0x2000;
+. = 0x5A000;
+of_3_distribute_3_0_cons_buff_1 = .;
+. += 0x2000;
+. = 0x5E000;
+flash_scale_3_3_buff_0 = .;
+. += 0x200;
+. = 0x52400;
+flash_scale_3_3_buff_1 = .;
+. += 0x200;
+. = 0x5E200;
+flash_state_3_3 = .;
+. += 0x200;
+. = 0x52600;
+flash_index_3_3 = .;
+. += 0x8;
+. = 0x60400;
+of_6_unicast_12_buff_0 = .;
+. += 0x2000;
+. = 0x64000;
+of_6_unicast_12_buff_1 = .;
+. += 0x2000;
+. = 0x68000;
+of_4_broadcast_0_0_12_cons_buff_0 = .;
+. += 0x2000;
+. = 0x6C000;
+of_4_broadcast_0_0_12_cons_buff_1 = .;
+. += 0x2000;
+. = 0x66000;
+of_3_distribute_4_1_cons_buff_0 = .;
+. += 0x2000;
+. = 0x6A000;
+of_3_distribute_4_1_cons_buff_1 = .;
+. += 0x2000;
+. = 0x6E000;
+flash_scale_4_4_buff_0 = .;
+. += 0x200;
+. = 0x62400;
+flash_scale_4_4_buff_1 = .;
+. += 0x200;
+. = 0x6E200;
+flash_state_4_4 = .;
+. += 0x200;
+. = 0x62600;
+flash_index_4_4 = .;
+. += 0x8;
+. = 0x70400;
+of_6_unicast_4_buff_0 = .;
+. += 0x2000;
+. = 0x74000;
+of_6_unicast_4_buff_1 = .;
+. += 0x2000;
+. = 0x78000;
+of_4_broadcast_0_0_4_cons_buff_0 = .;
+. += 0x2000;
+. = 0x7C000;
+of_4_broadcast_0_0_4_cons_buff_1 = .;
+. += 0x2000;
+. = 0x76000;
+of_3_distribute_4_0_cons_buff_0 = .;
+. += 0x2000;
+. = 0x7A000;
+of_3_distribute_4_0_cons_buff_1 = .;
+. += 0x2000;
+. = 0x7E000;
+flash_scale_4_3_buff_0 = .;
+. += 0x200;
+. = 0x72400;
+flash_scale_4_3_buff_1 = .;
+. += 0x200;
+. = 0x7E200;
+flash_state_4_3 = .;
+. += 0x200;
+. = 0x72600;
+flash_index_4_3 = .;
+. += 0x8;
+  .bss : { *(.bss*) } > data
+}
+INPUT(/home/micas/iron-stream-dse/experiments/q_fused/eq_ours_s2048_c8_h8/mha_prefill_stream_k1_h8_s2048_d64_flash_shared_fused.mlir.d/op0_mha.o)
+INPUT(/home/micas/iron-stream-dse/experiments/q_fused/eq_ours_s2048_c8_h8/mha_prefill_stream_k1_h8_s2048_d64_flash_shared_fused.mlir.d/op0_mha_passThrough.o)
+PROVIDE(main = core_4_3);

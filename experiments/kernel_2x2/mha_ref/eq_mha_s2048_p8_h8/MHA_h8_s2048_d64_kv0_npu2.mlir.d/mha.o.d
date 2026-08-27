@@ -1,0 +1,1 @@
+/home/micas/iron-stream-dse/experiments/kernel_2x2/mha_ref/eq_mha_s2048_p8_h8/mha.o.d

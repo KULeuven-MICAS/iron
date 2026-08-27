@@ -4,6 +4,7 @@
 from dataclasses import dataclass, field
 from typing import ClassVar, Dict
 
+import os
 import torch
 import numpy as np
 from ml_dtypes import bfloat16
@@ -89,6 +90,11 @@ class MHA(MLIROperator):
         mm_defines_colmaj = mm_defines_rowmaj + [
             "-DB_COL_MAJ",
         ]
+        # mha.cc's softmax body is shared with the stream-backed operator, so the same
+        # switch selects the reference one here. Without it an A/B would move only one
+        # side and read as a design difference.
+        if os.environ.get("IRON_SOFTMAX_REFERENCE", "0") == "1":
+            mm_defines_colmaj = mm_defines_colmaj + ["-DSOFTMAX_REFERENCE"]
         # mha.cc #includes softmax.cc and mm.cc (both col-major and row-major)
         # directly, so everything is compiled into a single mha.o translation unit.
         return [

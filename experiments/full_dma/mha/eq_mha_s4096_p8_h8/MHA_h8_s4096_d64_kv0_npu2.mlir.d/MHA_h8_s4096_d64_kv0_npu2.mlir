@@ -1,0 +1,1 @@
+/home/micas/iron-stream-dse/experiments/full_dma/mha/eq_mha_s4096_p8_h8/MHA_h8_s4096_d64_kv0_npu2.mlir

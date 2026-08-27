@@ -1,0 +1,1 @@
+/home/micas/iron-stream-dse/experiments/flash_dse/eq/eq_mha_s4096_p4_h2/MHA_h2_s4096_d64_kv0_npu2.mlir

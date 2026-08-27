@@ -266,6 +266,28 @@ def kernel_tiles(seq_len, d_head, k, flash=False, cfg=None):
     }
 
 
+# Per-stage cost calibration, from a traced run at seq 2048 on the 0|13|2 design.
+#
+# The estimator prices a node by its MAC count, which is wrong for this graph in two
+# separate ways, so utilisation is the dial that corrects both. A softmax does 64x fewer
+# MACs than the GEMM beside it and measures several times more expensive: it is
+# transcendentals and cross-lane reductions, not multiply-accumulates. And the two GEMMs
+# are not the same GEMM -- the value accumulation carries the online rescale on top of the
+# matmul and measures 3.4x the score GEMM, though their loop nests are identical.
+#
+# Calibrated so modelled/measured is one constant across all three stages, anchored on the
+# score GEMM at its original 61.8, and against TOTAL busy cycles per core over a run rather
+# than cost per step. The estimator already divides by the inter-core tiling, so a per-step
+# ratio double-counts it: the softmax runs on twice the cores and therefore half the steps.
+# Left uncalibrated the model ranks designs by a cost structure the hardware does not have.
+# See aie_kernels/aie2p/fast/README.md.
+SCORES_UTILIZATION = 61.8
+CONTEXT_UTILIZATION = 18.03
+SOFTMAX_UTILIZATION = (
+    0.1218 if os.environ.get("IRON_SOFTMAX_REFERENCE", "0") == "1" else 0.2184
+)
+
+
 def _placements(seq_len, d_head, k, causal, flash=False, cfg=None):
     """Where each layer runs.
 
@@ -282,13 +304,18 @@ def _placements(seq_len, d_head, k, causal, flash=False, cfg=None):
         return (("D0", grid.num_rows),) + ((("D2", cols),) if cols > 1 else ())
 
     gemm = lambda m, contraction, n: dict(  # noqa: E731
-        m=m, k=contraction, n=n, utilization=61.8, layout="default", bfp16_mmul=True
+        m=m,
+        k=contraction,
+        n=n,
+        utilization=SCORES_UTILIZATION,
+        layout="default",
+        bfp16_mmul=True,
     )
     # A row at a time, over the MAC tile bounds of the GEMMs either side of it.
     softmax = dict(
         m=_softmax_rows(seq_len, k, flash, cfg),
         n=FLASH_BLOCK if flash else seq_len,
-        utilization=50.0,
+        utilization=SOFTMAX_UTILIZATION,
         layout="contiguous",
         bfp16_mmul=True,
     )
@@ -304,7 +331,8 @@ def _placements(seq_len, d_head, k, causal, flash=False, cfg=None):
             # softmax, so the score side asks for no causal entry point of its own.
             kwargs = {
                 SCORE_SOFTMAX_NODE: gemm(*tiles[SCORE_SOFTMAX_NODE]),
-                CONTEXT_NODE: gemm(*tiles[CONTEXT_NODE]) | {"flash": True},
+                CONTEXT_NODE: gemm(*tiles[CONTEXT_NODE])
+                | {"flash": True, "utilization": CONTEXT_UTILIZATION},
             }
         else:
             # Wider than the layer it feeds, the softmax hands its block straight to those
@@ -316,7 +344,9 @@ def _placements(seq_len, d_head, k, causal, flash=False, cfg=None):
                 | ({"causal": True} if flash else {}),
                 SOFTMAX_NODE: softmax | ({"tiled_out": True} if handing_over else {}),
                 CONTEXT_NODE: gemm(*tiles[CONTEXT_NODE])
-                | ({"flash": True} if flash else {}),
+                | (
+                    {"flash": True, "utilization": CONTEXT_UTILIZATION} if flash else {}
+                ),
             }
         return {
             layer: Placement(

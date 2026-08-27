@@ -1,0 +1,78 @@
+======================================================================================================================
+PART 1 GRID
+======================================================================================================================
+
+-- seq 1024 --
+  mha_s1024_p1           cores=  3 med=   1961.9 min=   1956.3 max=   1968.4 sd=   2.7 n=25 errs=2/65536 maxabs=1.80e-01 maxrel=1.16e-01
+  mha_s1024_p2           cores=  6 med=   1047.0 min=   1045.3 max=   1058.9 sd=   3.5 n=25 errs=2/65536 maxabs=1.80e-01 maxrel=1.16e-01
+  mha_s1024_p4           cores= 12 med=    594.6 min=    592.9 max=    600.1 sd=   1.7 n=25 errs=2/65536 maxabs=1.80e-01 maxrel=1.16e-01
+  mha_s1024_p8           cores= 24 med=    359.9 min=    358.5 max=    374.5 sd=   3.9 n=25 errs=2/65536 maxabs=1.80e-01 maxrel=1.16e-01
+  flash_s1024_c1         (not run)
+  flash_s1024_c2         cores=  6 med=   1052.9 min=   1050.2 max=   1073.4 sd=   5.9 n=25 errs=0/65536 maxabs=4.30e-02 maxrel=1.00e+00
+  flash_s1024_c4         cores= 12 med=    715.6 min=    714.4 max=    722.3 sd=   1.8 n=25 errs=0/65536 maxabs=4.30e-02 maxrel=1.00e+00
+  flash_s1024_c8         cores= 24 med=    628.4 min=    626.1 max=    633.8 sd=   1.9 n=25 errs=0/65536 maxabs=4.30e-02 maxrel=1.00e+00
+
+-- seq 4096 --
+  mha_s4096_p1           cores=  3 med=  24045.8 min=  24040.3 max=  24115.8 sd=  15.3 n=25 errs=3/262144 maxabs=2.27e-01 maxrel=8.00e-02
+  mha_s4096_p2           cores=  6 med=  12238.6 min=  12208.1 max=  12310.5 sd=  35.9 n=25 errs=3/262144 maxabs=2.27e-01 maxrel=8.00e-02
+  mha_s4096_p4           cores= 12 med=   6380.1 min=   6338.3 max=   6409.2 sd=  12.8 n=25 errs=3/262144 maxabs=2.27e-01 maxrel=8.00e-02
+  mha_s4096_p8           cores= 24 med=   3332.8 min=   3330.6 max=   3336.1 sd=   1.4 n=25 errs=3/262144 maxabs=2.27e-01 maxrel=8.00e-02
+  flash_s4096_c1         (not run)
+  flash_s4096_c2         cores=  6 med=  11797.4 min=  11785.8 max=  11814.8 sd=   6.3 n=25 errs=0/262144 maxabs=4.88e-02 maxrel=1.00e+00
+  flash_s4096_c4         cores= 12 med=   6183.1 min=   6177.6 max=   6229.6 sd=  19.8 n=25 errs=0/262144 maxabs=4.88e-02 maxrel=1.00e+00
+  flash_s4096_c8         cores= 24 med=   3504.6 min=   3472.9 max=   3527.1 sd=  18.6 n=25 errs=0/262144 maxabs=4.88e-02 maxrel=1.00e+00
+
+======================================================================================================================
+SEQ 256 GRID
+======================================================================================================================
+  mha_s256_p1            cores=  3 med=    267.8 min=    266.9 max=    274.0 sd=   1.5 n=25 errs=3/16384 maxabs=1.64e-01 maxrel=2.37e-01
+  mha_s256_p2            cores=  6 med=    175.3 min=    174.1 max=    193.9 sd=   4.6 n=25 errs=3/16384 maxabs=1.64e-01 maxrel=2.37e-01
+  mha_s256_p4            cores= 12 med=    125.6 min=    122.5 max=    139.5 sd=   3.1 n=25 errs=3/16384 maxabs=1.64e-01 maxrel=2.37e-01
+  mha_s256_p8            cores= 24 med=    148.2 min=    146.2 max=    220.7 sd=  22.8 n=25 errs=3/32768 maxabs=nan maxrel=2.37e-01 PADDED
+  flash_s256_c1          BUILD/RUN FAILED: AssertionError: Error while applying pattern: 
+  flash_s256_c2          BUILD/RUN FAILED: RuntimeError: [aiecc] Compilation failed with exit code 1:
+  flash_s256_c4          cores= 12 med=    293.6 min=    292.6 max=    305.4 sd=   3.6 n=25 errs=0/16384 maxabs=4.00e-02 maxrel=1.00e+00
+  flash_s256_c8          BUILD/RUN FAILED: ValueError: seq_len 256 must be a multiple of 512: the query splits ov
+  k1c_s256_c1            BUILD/RUN FAILED: AssertionError: Error while applying pattern: 
+  k1c_s256_c2            cores=  6 med=    266.0 min=    264.8 max=    270.9 sd=   1.2 n=25 errs=0/16384 maxabs=4.88e-02 maxrel=1.00e+00
+  k1c_s256_c4            cores= 12 med=    277.0 min=    276.0 max=    283.8 sd=   2.1 n=25 errs=0/16384 maxabs=4.88e-02 maxrel=1.00e+00
+  k1c_s256_c8            cores= 24 med=    331.9 min=    330.0 max=    380.1 sd=  13.2 n=25 errs=0/16384 maxabs=4.88e-02 maxrel=1.00e+00
+  k1_s256_c4             cores= 12 med=    240.3 min=    238.6 max=    242.0 sd=   0.9 n=25 errs=0/16384 maxabs=2.15e-02 maxrel=1.00e+00
+  k3c_s256               cores=  4 med=    357.7 min=    356.6 max=    361.2 sd=   1.1 n=25 errs=0/16384 maxabs=4.88e-02 maxrel=1.00e+00
+
+======================================================================================================================
+FLASH SEQ SWEEP (c4) and column probes
+======================================================================================================================
+  flash_s256_c4          cores= 12 med=    293.6 min=    292.6 max=    305.4 sd=   3.6 n=25 errs=0/16384 maxabs=4.00e-02 maxrel=1.00e+00
+  flash_s512_c4          cores= 12 med=    392.3 min=    391.3 max=    394.2 sd=   0.9 n=25 errs=0/32768 maxabs=4.88e-02 maxrel=1.00e+00
+  flash_s768_c4          cores= 12 med=    529.7 min=    528.8 max=    549.6 sd=   4.7 n=25 errs=0/49152 maxabs=4.30e-02 maxrel=1.00e+00
+  flash_s1024_c4         cores= 12 med=    715.6 min=    714.4 max=    722.3 sd=   1.8 n=25 errs=0/65536 maxabs=4.30e-02 maxrel=1.00e+00
+  flash_s1536_c4         cores= 12 med=   1206.5 min=   1201.5 max=   1249.4 sd=  12.6 n=25 errs=0/98304 maxabs=3.91e-02 maxrel=1.00e+00
+  flash_s2048_c4         cores= 12 med=   1906.2 min=   1871.6 max=   1922.3 sd=  11.6 n=25 errs=0/131072 maxabs=4.69e-02 maxrel=1.00e+00
+  flash_s3072_c4         (not run)
+  flash_s4096_c4         cores= 12 med=   6183.1 min=   6177.6 max=   6229.6 sd=  19.8 n=25 errs=0/262144 maxabs=4.88e-02 maxrel=1.00e+00
+
+  flash_s512_c2          (not run)
+  flash_s2048_c2         (not run)
+  flash_s512_c8          (not run)
+  flash_s2048_c8         (not run)
+  flash_s1024_c1         (not run)
+  flash_s4096_c1         (not run)
+
+  mha_s512_p4            (not run)
+  mha_s512_p8            (not run)
+  mha_s2048_p4           (not run)
+  mha_s2048_p8           (not run)
+
+======================================================================================================================
+REPEAT-RUN / HEADS  ->  fixed = 2*T(1) - T(2);  marginal run = T(2) - T(1)
+======================================================================================================================
+  flash s256  c4     T(1)=   293.6  T(2)=    364.7  T(3)=    431.7  | marginal=    71.1  fixed=   222.5  (h3 check: marginal=   66.9)
+  flash s1024 c2     T(1)=  1052.9  T(2)=   1958.6  | marginal=   905.7  fixed=   147.2
+  flash s1024 c4     T(1)=   715.6  T(2)=   1202.5  T(3)=   1691.7  | marginal=   486.8  fixed=   228.8  (h3 check: marginal=  489.3)
+  flash s1024 c8     T(1)=   628.4  T(2)=    917.4  | marginal=   289.0  fixed=   339.4
+  flash s4096 c4     T(1)=  6183.1  T(2)=  12127.2  T(3)=  18133.6  | marginal=  5944.1  fixed=   239.1  (h3 check: marginal= 6006.4)
+  k1causal s256 c4   T(1)=   277.0  T(2)=    351.6  | marginal=    74.6  fixed=   202.4
+  k1causal s256 c2   T(1)=   266.0  T(2)=    382.7  | marginal=   116.7  fixed=   149.4
+  mha s1024 p4       T(1)=   594.6  T(2)=   1137.6  T(3)=   1754.4  | marginal=   543.0  fixed=    51.6  (h3 check: marginal=  616.8)
+  mha s4096 p4       T(1)=  6380.1  T(2)=  12651.7  T(3)=  18921.6  | marginal=  6271.6  fixed=   108.5  (h3 check: marginal= 6269.9)

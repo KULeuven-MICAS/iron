@@ -1,0 +1,1 @@
+/home/micas/iron-stream-dse/experiments/final/swiglu_stream/stream_s512_e4096_h11008/op0_mm_32_32_64.o.d

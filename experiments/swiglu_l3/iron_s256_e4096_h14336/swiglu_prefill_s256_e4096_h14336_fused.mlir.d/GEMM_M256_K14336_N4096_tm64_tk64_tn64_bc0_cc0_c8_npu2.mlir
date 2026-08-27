@@ -1,0 +1,1 @@
+/home/micas/iron-stream-dse/experiments/swiglu_l3/iron_s256_e4096_h14336/GEMM_M256_K14336_N4096_tm64_tk64_tn64_bc0_cc0_c8_npu2.mlir

@@ -3,6 +3,12 @@
 
 #include "softmax.cc"
 
+// Four-rows-per-call online softmax. See fast/README.md for the measurement that
+// motivates it; IRON_SOFTMAX_REFERENCE=1 compiles the original per-row body instead.
+#ifndef SOFTMAX_REFERENCE
+#include "fast/softmax_fast.cc"
+#endif
+
 // mha.cc is a single compilation unit that includes mm.cc and softmax.cc via
 // #include (there is no separate link step).  The col-major B variants are
 // compiled by passing -DB_COL_MAJ to the compiler; this flag is set in the
@@ -324,24 +330,28 @@ static void partial_softmax_body(bfloat16 *A,
                 in = rows;
             }
             bfloat16 *out = (tiled & TILED_OUT) ? probs : P + B_kv * first;
-            for (int32_t k = 0; k < MAC_TILE && first + k < valid_q_rows; k++) {
+            int32_t group = valid_q_rows - first;
+            if (group > MAC_TILE)
+                group = MAC_TILE;
+#ifdef SOFTMAX_REFERENCE
+            for (int32_t k = 0; k < group; k++) {
                 partial_softmax_bf16(in + B_kv * k, out + B_kv * k, scale_buffer, B_kv, first + k, B_q, inv_scale);
             }
+#else
+            partial_softmax_rows_fast(in, out, scale_buffer, B_kv, first, group, B_q, inv_scale);
+#endif
             if (tiled & TILED_OUT) {
                 scatter_group(probs, P, B_kv, first, valid_q_rows);
             }
         }
     } else {
-        int32_t i = 0;
-        for (; i + 4 <= valid_q_rows; i += 4) {
-            partial_softmax_bf16(A + B_kv * i, P + B_kv * i, scale_buffer, B_kv, i, B_q, inv_scale);
-            partial_softmax_bf16(A + B_kv * (i + 1), P + B_kv * (i + 1), scale_buffer, B_kv, i + 1, B_q, inv_scale);
-            partial_softmax_bf16(A + B_kv * (i + 2), P + B_kv * (i + 2), scale_buffer, B_kv, i + 2, B_q, inv_scale);
-            partial_softmax_bf16(A + B_kv * (i + 3), P + B_kv * (i + 3), scale_buffer, B_kv, i + 3, B_q, inv_scale);
-        }
-        for (; i < valid_q_rows; i++) {
+#ifdef SOFTMAX_REFERENCE
+        for (int32_t i = 0; i < valid_q_rows; i++) {
             partial_softmax_bf16(A + B_kv * i, P + B_kv * i, scale_buffer, B_kv, i, B_q, inv_scale);
         }
+#else
+        partial_softmax_rows_fast(A, P, scale_buffer, B_kv, 0, valid_q_rows, B_q, inv_scale);
+#endif
     }
     // Zero out P rows corresponding to padded Q rows
     if (valid_q_rows < B_q) {

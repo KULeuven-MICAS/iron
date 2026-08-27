@@ -1,0 +1,1 @@
+/home/micas/iron-stream-dse/experiments/grid823/eq_mha_s1024_p4_h16/mha.o.d

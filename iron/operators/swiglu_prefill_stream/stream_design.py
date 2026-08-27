@@ -84,6 +84,9 @@ LAYER_TILES = (64, 64, 64)  # k=5: one layer per core
 # a row-major tensor, so each transfer runs the length of the rows rather than one
 # MAC tile at a time.
 ELEMENTWISE_ROWS = 1
+# A row wider than this does not leave room for the three operands an elementwise layer
+# holds at once. The width has to divide the dimension, so the row is read in equal pieces.
+ELEMENTWISE_WIDTH = 2048
 
 # Which layers each fused group contains, per number of groups ``k``. Splitting
 # makes stream-dse emit one design per group; the tensor handed from one group to
@@ -109,6 +112,25 @@ def gemm_tiles(k):
         UP: (sequence, embedding, hidden),
         DOWN: (sequence, hidden, embedding),
     }
+
+
+def _row_width(hidden_dim):
+    """How much of a row an elementwise core takes at once: the whole row where it fits,
+    and otherwise the widest piece that divides it."""
+    if hidden_dim <= ELEMENTWISE_WIDTH:
+        return hidden_dim
+    return max(w for w in range(ELEMENTWISE_WIDTH, 0, -1) if hidden_dim % w == 0)
+
+
+def default_groups(hidden_dim):
+    """How many fused groups to build when the caller does not say.
+
+    Fusing gives each layer a share of the array, which pays while the block is small
+    enough that the round trips it saves outweigh the cores it gives up. Once a row no
+    longer fits a core the block is past that point, and the layers are better off taking
+    the whole array in turn.
+    """
+    return LAYER_BY_LAYER if _row_width(hidden_dim) < hidden_dim else 1
 
 
 def _placements(k, hidden_dim):
@@ -146,7 +168,7 @@ def _placements(k, hidden_dim):
         wide = grid.all_columns
         gemm_split = (("D0", grid.num_rows), ("D2", grid.num_columns))
         elementwise_split = (("D0", grid.num_columns),)
-        rows_wide = elementwise(ELEMENTWISE_ROWS, hidden_dim, "contiguous")
+        rows_wide = elementwise(ELEMENTWISE_ROWS, _row_width(hidden_dim), "contiguous")
         return {
             GATE: Placement(wide, gemm_split, gemm(tiles[GATE])),
             UP: Placement(wide, gemm_split, gemm(tiles[UP])),
@@ -172,7 +194,7 @@ def _placements(k, hidden_dim):
 def _layer_tiling(layer, hidden_dim, k):
     """Intra-core tiling of one layer, over the dimensions it iterates."""
     if layer not in (GATE, UP, DOWN):
-        return [(layer, "D1", hidden_dim), (layer, "D0", ELEMENTWISE_ROWS)]
+        return [(layer, "D1", _row_width(hidden_dim)), (layer, "D0", ELEMENTWISE_ROWS)]
     sequence, contraction, output = gemm_tiles(k)[layer]
     return [
         (layer, "D1", contraction),

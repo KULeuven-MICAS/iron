@@ -1,0 +1,4 @@
+EQ DONE seq=512 c=8 p=8 h=1
+EQ DONE seq=2048 c=8 p=8 h=1
+EQ DONE seq=8192 c=8 p=8 h=1
+EQ24 DONE

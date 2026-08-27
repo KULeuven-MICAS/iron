@@ -1,0 +1,1 @@
+/home/micas/iron-stream-dse/experiments/steel/eq_ours_s16384_c8_h32/_MHAStreamGroup_seq_len16384_d_head64_k1_group_index0_causal1_flash1_npu2_a3a9bedd.mlir

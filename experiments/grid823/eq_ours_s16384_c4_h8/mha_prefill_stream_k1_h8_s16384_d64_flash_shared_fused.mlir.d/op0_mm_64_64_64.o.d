@@ -1,0 +1,1 @@
+/home/micas/iron-stream-dse/experiments/grid823/eq_ours_s16384_c4_h8/op0_mm_64_64_64.o.d

@@ -1,0 +1,1 @@
+/home/micas/iron-stream-dse/experiments/deck_260826/eq_mha_s2048_p8_h32/MHA_h32_s2048_d64_kv0_npu2.mlir

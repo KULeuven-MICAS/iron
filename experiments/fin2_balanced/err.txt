@@ -1,0 +1,18 @@
+W0826 10:15:45.990000 1853929 torch/onnx/_internal/exporter/_registration.py:107] torchvision is not installed. Skipping torchvision::nms
+W0826 10:15:45.991000 1853929 torch/onnx/_internal/exporter/_registration.py:107] torchvision is not installed. Skipping torchvision::roi_align
+W0826 10:15:45.991000 1853929 torch/onnx/_internal/exporter/_registration.py:107] torchvision is not installed. Skipping torchvision::roi_pool
+W0826 10:15:45.991000 1853929 torch/onnx/_internal/exporter/_registration.py:107] torchvision is not installed. Skipping torchvision::deform_conv2d
+/usr/lib/python3.12/copyreg.py:99: FutureWarning: `isinstance(treespec, LeafSpec)` is deprecated, use `isinstance(treespec, TreeSpec) and treespec.is_leaf()` instead.
+  return cls.__new__(cls, *args)
+W0826 10:15:46.695000 1853929 torch/onnx/_internal/exporter/_registration.py:107] torchvision is not installed. Skipping torchvision::nms
+W0826 10:15:46.695000 1853929 torch/onnx/_internal/exporter/_registration.py:107] torchvision is not installed. Skipping torchvision::roi_align
+W0826 10:15:46.695000 1853929 torch/onnx/_internal/exporter/_registration.py:107] torchvision is not installed. Skipping torchvision::roi_pool
+W0826 10:15:46.696000 1853929 torch/onnx/_internal/exporter/_registration.py:107] torchvision is not installed. Skipping torchvision::deform_conv2d
+/usr/lib/python3.12/copyreg.py:99: FutureWarning: `isinstance(treespec, LeafSpec)` is deprecated, use `isinstance(treespec, TreeSpec) and treespec.is_leaf()` instead.
+  return cls.__new__(cls, *args)
+ConstraintOptimizationAllocationStage: legacy kwargs configuration path is deprecated. Please pass a ConstraintOptStageConfig. Building config from kwargs for now.
+Traceback (most recent call last):
+  File "/home/micas/stream-dse-iron-slides/260824_full_array/harness/measure_one.py", line 102, in <module>
+    rec["cores"] = a.columns * sum(len(r) for r in _sd.FUSED_ROWS.values())
+                                                   ^^^^^^^^^^^^^^
+AttributeError: module 'iron.operators.mha_prefill_stream.stream_design' has no attribute 'FUSED_ROWS'

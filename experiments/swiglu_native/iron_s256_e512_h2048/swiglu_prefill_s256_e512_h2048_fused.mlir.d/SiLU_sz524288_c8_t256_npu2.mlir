@@ -1,0 +1,1 @@
+/home/micas/iron-stream-dse/experiments/swiglu_native/iron_s256_e512_h2048/SiLU_sz524288_c8_t256_npu2.mlir

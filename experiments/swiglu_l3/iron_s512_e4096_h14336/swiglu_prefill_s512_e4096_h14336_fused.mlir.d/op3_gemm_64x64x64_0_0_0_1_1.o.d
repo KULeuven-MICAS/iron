@@ -1,0 +1,1 @@
+/home/micas/iron-stream-dse/experiments/swiglu_l3/iron_s512_e4096_h14336/op3_gemm_64x64x64_0_0_0_1_1.o.d

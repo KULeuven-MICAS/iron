@@ -1,0 +1,214 @@
+=== 2A: seq 256 grid ===
+rc=0 tag=mha_s256_p1
+  OK  cores=3 median=267.8us min=266.9 max=274.0 sd=1.5 errs=3/16384 maxabs=1.641e-01 padded=False build=4s
+rc=0 tag=mha_s256_p2
+  OK  cores=6 median=175.3us min=174.1 max=193.9 sd=4.6 errs=3/16384 maxabs=1.641e-01 padded=False build=5s
+rc=0 tag=mha_s256_p4
+  OK  cores=12 median=125.6us min=122.5 max=139.5 sd=3.1 errs=3/16384 maxabs=1.641e-01 padded=False build=5s
+rc=0 tag=mha_s256_p8
+  OK  cores=24 median=148.2us min=146.2 max=220.7 sd=22.8 errs=3/32768 maxabs=nan padded=True build=10s
+rc=0 tag=flash_s256_c1
+  FAIL AssertionError: Error while applying pattern: 
+
+"builtin.module"() ({
+  "stream.fusion_group"() ({
+  ^0(%0 : !stream.strensor<256(c2)x64(c0)xbf16, ["tile_0_0"]>, %1 : !stream.strensor<64(c0)x256(c1)xbf16, ["tile_0_0"]>, %2 : !stream.strensor<256(c1)x64(c3)xbf16, ["tile_0_0"]>, %3 : !stream.strensor<256(c2)x64(c3)xbf16, ["tile_0_0"]>):
+    %4 = "stream.channel"() : () -> !stream.channel
+    "stream.push"(%0, %4) <{spatial_index = #stream.ss<>}> : (!stream.strensor<256(c2)x64(c0)xbf16, ["tile_0_0"]>, !stream.channel) -> ()
+    %5 = "stream.pull"(%4) <{spatial_index = #stream.ss<>}> : (!stream.channel) -> !stream.strensor<4(t2)|4(t1)x1(t2)x64(k2)x64(k0)xbf16, ["tile_1_1"]>
+    %6 = "stream.channel"() : () -> !stream.channel
+    "stream.push"(%1, %6) <{spatial_index = #stream.ss<>}> : (!stream.strensor<64(c0)x256(c1)xbf16, ["tile_0_0"]>, !stream.channel) -> ()
+    %7 = "stream.pull"(%6) <{spatial_index = #stream.ss<>}> : (!stream.channel) -> !stream.strensor<|4(t2)x4(t1)x1(a2)x64(k0)x64(k1)xbf16, ["tile_7_1"]>
+    %8 = "stream.channel"() : () -> !stream.channel
+    "stream.push"(%2, %8) <{spatial_index = #stream.ss<>}> : (!stream.strensor<256(c1)x64(c3)xbf16, ["tile_0_0"]>, !stream.channel) -> ()
+    %9 = "stream.pull"(%8) <{spatial_index = #stream.ss<>}> : (!stream.channel) -> !stream.strensor<|4(t2)x4(t1)x1(a2)x64(k1)x64(k3)xbf16, ["tile_2_1"]>
+    %10 = "stream.channel"() : () -> !stream.channel
+    "stream.push"(%5, %10) <{spatial_index = #stream.ss<>}> : (!stream.strensor<4(t2)|4(t1)x1(t2)x64(k2)x64(k0)xbf16, ["tile_1_1"]>, !stream.channel) -> ()
+    %11 = "stream.pull"(%10) <{spatial_index = #stream.ss<>}> : (!stream.channel) -> !stream.strensor<4(t2)|4(t1)x1(t2)x64(k2)x64(k0)xbf16, ["tile_0_2"]>
+    %12 = "stream.gather"(%11) : (!stream.strensor<4(t2)|4(t1)x1(t2)x64(k2)x64(k0)xbf16, ["tile_0_2"]>) -> !stream.strensor<4(t2)|4(t1)x1(t2)x64(k2)x64(k0)xbf16, ["tile_0_2"]>
+    ^^^^^^^^^^^^^^^^^^^^^-----------
+    | Error while applying pattern: 
+    --------------------------------
+    %13 = "stream.channel"() : () -> !stream.channel
+    "stream.push"(%7, %13) <{spatial_index = #stream.ss<>}> : (!stream.strensor<|4(t2)x4(t1)x1(a2)x64(k0)x64(k1)xbf16, ["tile_7_1"]>, !stream.channel) -> ()
+    %14 = "stream.pull"(%13) <{spatial_index = #stream.ss<>}> : (!stream.channel) -> !stream.strensor<|4(t2)x4(t1)x1(a2)x64(k0)x64(k1)xbf16, ["tile_0_2"]>
+    %15 = "stream.gather"(%14) : (!stream.strensor<|4(t2)x4(t1)x1(a2)x64(k0)x64(k1)xbf16, ["tile_0_2"]>) -> !stream.strensor<|4(t2)x4(t1)x1(a2)x64(k0)x64(k1)xbf16, ["tile_0_2"]>
+    %16 = "stream.channel"() : () -> !stream.channel
+    "stream.push"(%9, %16) <{spatial_index = #stream.ss<>}> : (!stream.strensor<|4(t2)x4(t1)x1(a2)x64(k1)x64(k3)xbf16, ["tile_2_1"]>, !stream.channel) -> ()
+    %17 = "stream.pull"(%16) <{spatial_index = #stream.ss<>}> : (!stream.channel) -> !stream.strensor<|4(t2)x4(t1)x1(a2)x64(k1)x64(k3)xbf16, ["tile_0_4"]>
+    %18 = "stream.gather"(%17) : (!stream.strensor<|4(t2)x4(t1)x1(a2)x64(k1)x64(k3)xbf16, ["tile_0_4"]>) -> !stream.strensor<|4(t2)x4(t1)x1(a2)x64(k1)x64(k3)xbf16, ["tile_0_4"]>
+    %19 = "stream.computation_node"(%12, %15) <{kernel = "matmul_bf16_bf16_64_64_64_causal", spatial_index = #stream.ss<0(p2)>}> : (!stream.strensor<4(t2)|4(t1)x1(t2)x64(k2)x64(k0)xbf16, ["tile_0_2"]>, !stream.strensor<|4(t2)x4(t1)x1(a2)x64(k0)x64(k1)xbf16, ["tile_0_2"]>) -> !stream.strensor<4(t2)x4(t1)x1(s2)|64(k2)x64(k1)xbf16, ["tile_0_2"]>
+    %20 = "stream.gather"(%19) : (!stream.strensor<4(t2)x4(t1)x1(s2)|64(k2)x64(k1)xbf16, ["tile_0_2"]>) -> !stream.strensor<4(t2)x4(t1)x1(s2)|64(k2)x64(k1)xbf16, ["tile_0_2"]>
+    %21 = "stream.channel"() : () -> !stream.channel
+    "stream.push"(%20, %21) <{spatial_index = #stream.ss<0(p2)>}> : (!stream.strensor<4(t2)x4(t1)x1(s2)|64(k2)x64(k1)xbf16, ["tile_0_2"]>, !stream.channel) -> ()
+    %22 = "stream.pull"(%21) <{spatial_index = #stream.ss<>}> : (!stream.channel) -> !stream.strensor<4(t2)x4(t1)|1(t2)x64(k2)x64(k1)xbf16, ["tile_1_1"]>
+    %23 = "stream.gather"(%22) : (!stream.strensor<4(t2)x4(t1)|1(t2)x64(k2)x64(k1)xbf16, ["tile_1_1"]>) -> !stream.strensor<4(t2)x4(t1)|1(t2)x64(k2)x64(k1)xbf16, ["tile_1_1"]>
+    %24 = "stream.channel"() : () -> !stream.channel
+    "stream.push"(%23, %24) <{spatial_index = #stream.ss<>}> : (!stream.strensor<4(t2)x4(t1)|1(t2)x64(k2)x64(k1)xbf16, ["tile_1_1"]>, !stream.channel) -> ()
+    %25 = "stream.pull"(%24) <{spatial_index = #stream.ss<>}> : (!stream.channel) -> !stream.strensor<4(t2)x4(t1)x1(t2)|64(k2)x64(k1)xbf16, ["tile_0_3"]>
+    %26 = "stream.gather"(%25) : (!stream.strensor<4(t2)x4(t1)x1(t2)|64(k2)x64(k1)xbf16, ["tile_0_3"]>) -> !stream.strensor<4(t2)x4(t1)x1(t2)|64(k2)x64(k1)xbf16, ["tile_0_3"]>
+    %27 = "stream.computation_node"(%26) <{kernel = "partial_softmax_64_64", spatial_index = #stream.ss<0(p2)>}> : (!stream.strensor<4(t2)x4(t1)x1(t2)|64(k2)x64(k1)xbf16, ["tile_0_3"]>) -> !stream.strensor<4(t2)x4(t1)x1(s2)|64(k2)x64(k1)xbf16, ["tile_0_3"]>
+    %28 = "stream.gather"(%27) : (!stream.strensor<4(t2)x4(t1)x1(s2)|64(k2)x64(k1)xbf16, ["tile_0_3"]>) -> !stream.strensor<4(t2)x4(t1)x1(s2)|64(k2)x64(k1)xbf16, ["tile_0_3"]>
+    %29 = "stream.channel"() : () -> !stream.channel
+    "stream.push"(%28, %29) <{spatial_index = #stream.ss<0(p2)>}> : (!stream.strensor<4(t2)x4(t1)x1(s2)|64(k2)x64(k1)xbf16, ["tile_0_3"]>, !stream.channel) -> ()
+    %30 = "stream.pull"(%29) <{spatial_index = #stream.ss<>}> : (!stream.channel) -> !stream.strensor<4(t2)x4(t1)|1(t2)x64(k2)x64(k1)xbf16, ["tile_1_1"]>
+    %31 = "stream.gather"(%30) : (!stream.strensor<4(t2)x4(t1)|1(t2)x64(k2)x64(k1)xbf16, ["tile_1_1"]>) -> !stream.strensor<4(t2)x4(t1)|1(t2)x64(k2)x64(k1)xbf16, ["tile_1_1"]>
+    %32 = "stream.channel"() : () -> !stream.channel
+    "stream.push"(%31, %32) <{spatial_index = #stream.ss<>}> : (!stream.strensor<4(t2)x4(t1)|1(t2)x64(k2)x64(k1)xbf16, ["tile_1_1"]>, !stream.channel) -> ()
+    %33 = "stream.pull"(%32) <{spatial_index = #stream.ss<>}> : (!stream.channel) -> !stream.strensor<4(t2)x4(t1)x1(t2)|64(k2)x64(k1)xbf16, ["tile_0_4"]>
+    %34 = "stream.gather"(%33) : (!stream.strensor<4(t2)x4(t1)x1(t2)|64(k2)x64(k1)xbf16, ["tile_0_4"]>) -> !stream.strensor<4(t2)x4(t1)x1(t2)|64(k2)x64(k1)xbf16, ["tile_0_4"]>
+    %35 = "stream.computation_node"(%34, %18) <{kernel = "matmul_PV_64_64_64", spatial_index = #stream.ss<0(p2)>}> : (!stream.strensor<4(t2)x4(t1)x1(t2)|64(k2)x64(k1)xbf16, ["tile_0_4"]>, !stream.strensor<|4(t2)x4(t1)x1(a2)x64(k1)x64(k3)xbf16, ["tile_0_4"]>) -> !stream.strensor<4(t2)|4(t1)x1(s2)x64(k2)x64(k3)xbf16, ["tile_0_4"]>
+    %36 = "stream.gather"(%35) : (!stream.strensor<4(t2)|4(t1)x1(s2)x64(k2)x64(k3)xbf16, ["tile_0_4"]>) -> !stream.strensor<4(t2)|4(t1)x1(s2)x64(k2)x64(k3)xbf16, ["tile_0_4"]>
+    %37 = "stream.channel"() : () -> !stream.channel
+    "stream.push"(%36, %37) <{spatial_index = #stream.ss<0(p2)>}> : (!stream.strensor<4(t2)|4(t1)x1(s2)x64(k2)x64(k3)xbf16, ["tile_0_4"]>, !stream.channel) -> ()
+    %38 = "stream.pull"(%37) <{spatial_index = #stream.ss<>}> : (!stream.channel) -> !stream.strensor<4(t2)|4(t1)x1(t2)x64(k2)x64(k3)xbf16, ["tile_7_1"]>
+    %39 = "stream.gather"(%38) : (!stream.strensor<4(t2)|4(t1)x1(t2)x64(k2)x64(k3)xbf16, ["tile_7_1"]>) -> !stream.strensor<4(t2)|4(t1)x1(t2)x64(k2)x64(k3)xbf16, ["tile_7_1"]>
+    %40 = "stream.channel"() : () -> !stream.channel
+    "stream.push"(%39, %40) <{spatial_index = #stream.ss<>}> : (!stream.strensor<4(t2)|4(t1)x1(t2)x64(k2)x64(k3)xbf16, ["tile_7_1"]>, !stream.channel) -> ()
+    %41 = "stream.pull"(%40) <{spatial_index = #stream.ss<>}> : (!stream.channel) -> !stream.strensor<256(c2)x64(c3)xbf16, ["tile_0_0"]>
+    %42 = "stream.gather"(%41) : (!stream.strensor<256(c2)x64(c3)xbf16, ["tile_0_0"]>) -> !stream.strensor<256(c2)x64(c3)xbf16, ["tile_0_0"]>
+    "stream.yield"(%42) : (!stream.strensor<256(c2)x64(c3)xbf16, ["tile_0_0"]>) -> ()
+  }) : () -> ()
+}) : () -> ()
+
+
+rc=0 tag=flash_s256_c2
+  FAIL RuntimeError: [aiecc] Compilation failed with exit code 1:
+aiecc: (1/43) input.mlir (0 inputs) took 0 ms
+aiecc: (2/43) noCtrlPktSeqs (0 inputs) took 0 ms
+aiecc: (3/43) placed.mlir (1 inputs) took 4 ms
+aiecc: (4/43) ctrlPktSeqs (0 inputs) took 0 ms
+aiecc: (6/43) traced.mlir (1 inputs) took 3 ms
+aiecc: (7/43) fullElfCtrlpktNonEmpty (0 inputs) took 0 ms
+/home/micas/iron-stream-dse/experiments/flash_dse/builds/flash_s256_c2/mha_prefill_stream_k1_h1_s256_d64_flash_shared_fused.mlir.d/aie.mlir:562:5: warning: Failed to allocate buffer: "of_3_unicast_0_0_cons_buff_1" with size: 8192 bytes.
+    aie.objectfifo @of_3_unicast_0_0(%mem_tile_6_1 dimensionsToStream [<size = 8, stride = 512>, <size = 8, stride = 8>, <size = 8, stride = 64>, <size = 8, stride = 1>], {%tile_0_2}, [2 : i32, 2 : i32]) : !aie.objectfifo<memref<64x64xbf16>>  
+    ^
+/home/micas/iron-stream-dse/experiments/flash_dse/builds/flash_s256_c2/mha_prefill_stream_k1_h1_s256_d64_flash_shared_fused.mlir.d/aie.mlir:562:5: note: see current operation: %of_3_unicast_0_0_cons_buff_1 = aie.buffer(%tile_0_2) {sym_name = "of_3_unicast_0_0_cons_buff_1"} : memref<64x64xbf16> 
+/home/micas/iron-stream-dse/experiments/flash_dse/builds/flash_s256_c2/mha_prefill_stream_k1_h1_s256_d64_flash_shared_fused.mlir.d/aie.mlir:11:17: warning: Not all requested buffers fit in the available memory.
+
+    %tile_0_2 = aie.tile(0, 2)
+                ^
+/home/micas/iron-stream-dse/experiments/flash_dse/builds/flash_s256_c2/mha_prefill_stream_k1_h1_s256_d64_flash_shared_fused.mlir.d/aie.mlir:11:17: note: see current operation: %tile_0_2 = aie.tile(0, 2) {controller_id = #aie.packet_info<pkt_type = 0, pkt_id = 27>}
+/home/micas/iron-stream-dse/experiments/flash_dse/builds/flash_s256_c2/mha_prefill_stream_k1_h1_s256_d64_flash_shared_fused.mlir.d/aie.mlir:11:17: note: Current configuration of buffers in bank(s) : MemoryMap:
+		(stack) 	: 0x0-0x3FF 	(1024 bytes)
+	bank : 0	0x0-0x3FFF
+		of_6_unicast_0_buff_0 	: 0x400-0x23FF 	(8192 bytes)
+	bank : 1	0x4000-0x7FFF
+		of_6_unicast_0_buff_1 	: 0x4000-0x5FFF 	(8192 bytes)
+		of_4_broadcast_0_0_0_cons_buff_2 	: 0x6000-0x7FFF 	(8192 bytes)
+	bank : 2	0x8000-0xBFFF
+		of_4_broadcast_0_0_0_cons_buff_0 	: 0x8000-0x9FFF 	(8192 bytes)
+		of_4_broadcast_0_0_0_cons_buff_3 	: 0xA000-0xBFFF 	(8192 bytes)
+	bank : 3	0xC000-0xFFFF
+		of_4_broadcast_0_0_0_cons_buff_1 	: 0xC000-0xDFFF 	(8192 bytes)
+		of_3_unicast_0_0_cons_buff_0 	: 0xE000-0xFFFF 	(8192 bytes)
+
+/home/micas/iron-stream-dse/experiments/flash_dse/builds/flash_s256_c2/mha_prefill_stream_k1_h1_s256_d64_flash_shared_fused.mlir.d/aie.mlir:11:17: warning: Bank-aware allocation failed, trying basic sequential allocation.
+    %tile_0_2 = aie.tile(0, 2)
+                ^
+/home/micas/iron-stream-dse/experiments/flash_dse/builds/flash_s256_c2/mha_prefill_stream_k1_h1_s256_d64_flash_shared_fused.mlir.d/aie.mlir:11:17: note: see current operation: %tile_0_2 = aie.tile(0, 2) {controller_id = #aie.packet_info<pkt_type = 0, pkt_id = 27>}
+/home/micas/iron-stream-dse/experiments/flash_dse/builds/flash_s256_c2/mha_prefill_stream_k1_h1_s256_d64_flash_shared_fused.mlir.d/aie.mlir:11:17: error: 'aie.tile' op allocated buffers exceeded available memory
+
+    %tile_0_2 = aie.tile(0, 2)
+                ^
+/home/micas/iron-stream-dse/experiments/flash_dse/builds/flash_s256_c2/mha_prefill_stream_k1_h1_s256_d64_flash_shared_fused.mlir.d/aie.mlir:11:17: note: see current operation: %11 = "aie.tile"() <{col = 0 : i32, row = 2 : i32}> {controller_id = #aie.packet_info<pkt_type = 0, pkt_id = 27>} : () -> index
+/home/micas/iron-stream-dse/experiments/flash_dse/builds/flash_s256_c2/mha_prefill_stream_k1_h1_s256_d64_flash_shared_fused.mlir.d/aie.mlir:11:17: note: MemoryMap:
+	(stack) 	: 0x0-0x3FF 	(1024 bytes)
+	of_6_unicast_0_buff_0 	: 0x400-0x23FF 	(8192 bytes)
+	of_6_unicast_0_buff_1 	: 0x2400-0x43FF 	(8192 bytes)
+	of_4_broadcast_0_0_0_cons_buff_0 	: 0x4400-0x63FF 	(8192 bytes)
+	of_4_broadcast_0_0_0_cons_buff_1 	: 0x6400-0x83FF 	(8192 bytes)
+	of_4_broadcast_0_0_0_cons_buff_2 	: 0x8400-0xA3FF 	(8192 bytes)
+	of_4_broadcast_0_0_0_cons_buff_3 	: 0xA400-0xC3FF 	(8192 bytes)
+	of_3_unicast_0_0_cons_buff_0 	: 0xC400-0xE3FF 	(8192 bytes)
+	of_3_unicast_0_0_cons_buff_1 	: 0xE400-0x103FF 	(8192 bytes)
+
+/home/micas/iron-stream-dse/experiments/flash_dse/builds/flash_s256_c2/mha_prefill_stream_k1_h1_s256_d64_flash_shared_fused.mlir.d/aie.mlir:11:17: error: 'aie.tile' op Basic sequential allocation also failed.
+    %tile_0_2 = aie.tile(0, 2)
+                ^
+/home/micas/iron-stream-dse/experiments/flash_dse/builds/flash_s256_c2/mha_prefill_stream_k1_h1_s256_d64_flash_shared_fused.mlir.d/aie.mlir:11:17: note: see current operation: %11 = "aie.tile"() <{col = 0 : i32, row = 2 : i32}> {controller_id = #aie.packet_info<pkt_type = 0, pkt_id = 27>} : () -> index
+aiecc: edge 'input_with_addresses.mlir' (key 'input.mlir') failed
+aiecc: pipeline failed
+
+rc=0 tag=flash_s256_c4
+  OK  cores=12 median=293.6us min=292.6 max=305.4 sd=3.6 errs=0/16384 maxabs=4.004e-02 padded=False build=69s
+rc=0 tag=flash_s256_c8
+  FAIL ValueError: seq_len 256 must be a multiple of 512: the query splits over 8 columns in whole blocks of 64
+rc=0 tag=k1c_s256_c1
+  FAIL AssertionError: Error while applying pattern: 
+
+"builtin.module"() ({
+  "stream.fusion_group"() ({
+  ^0(%0 : !stream.strensor<256(c2)x64(c0)xbf16, ["tile_0_0"]>, %1 : !stream.strensor<64(c0)x256(c1)xbf16, ["tile_0_0"]>, %2 : !stream.strensor<256(c1)x64(c3)xbf16, ["tile_0_0"]>, %3 : !stream.strensor<256(c2)x64(c3)xbf16, ["tile_0_0"]>):
+    %4 = "stream.channel"() : () -> !stream.channel
+    "stream.push"(%0, %4) <{spatial_index = #stream.ss<>}> : (!stream.strensor<256(c2)x64(c0)xbf16, ["tile_0_0"]>, !stream.channel) -> ()
+    %5 = "stream.pull"(%4) <{spatial_index = #stream.ss<>}> : (!stream.channel) -> !stream.strensor<16(t2)x1(t2)|16(k2)x64(k0)xbf16, ["tile_1_1"]>
+    %6 = "stream.channel"() : () -> !stream.channel
+    "stream.push"(%1, %6) <{spatial_index = #stream.ss<>}> : (!stream.strensor<64(c0)x256(c1)xbf16, ["tile_0_0"]>, !stream.channel) -> ()
+    %7 = "stream.pull"(%6) <{spatial_index = #stream.ss<>}> : (!stream.channel) -> !stream.strensor<|16(t2)x1(a2)x64(k0)x256(k1)xbf16, ["tile_6_1"]>
+    %8 = "stream.channel"() : () -> !stream.channel
+    "stream.push"(%2, %8) <{spatial_index = #stream.ss<>}> : (!stream.strensor<256(c1)x64(c3)xbf16, ["tile_0_0"]>, !stream.channel) -> ()
+    %9 = "stream.pull"(%8) <{spatial_index = #stream.ss<>}> : (!stream.channel) -> !stream.strensor<|16(t2)x1(a2)x256(k1)x64(k3)xbf16, ["tile_5_1"]>
+    %10 = "stream.channel"() : () -> !stream.channel
+    "stream.push"(%5, %10) <{spatial_index = #stream.ss<>}> : (!stream.strensor<16(t2)x1(t2)|16(k2)x64(k0)xbf16, ["tile_1_1"]>, !stream.channel) -> ()
+    %11 = "stream.pull"(%10) <{spatial_index = #stream.ss<>}> : (!stream.channel) -> !stream.strensor<16(t2)x1(t2)|16(k2)x64(k0)xbf16, ["tile_0_2"]>
+    %12 = "stream.gather"(%11) : (!stream.strensor<16(t2)x1(t2)|16(k2)x64(k0)xbf16, ["tile_0_2"]>) -> !stream.strensor<16(t2)x1(t2)|16(k2)x64(k0)xbf16, ["tile_0_2"]>
+    ^^^^^^^^^^^^^^^^^^^^^-----------
+    | Error while applying pattern: 
+    --------------------------------
+    %13 = "stream.channel"() : () -> !stream.channel
+    "stream.push"(%7, %13) <{spatial_index = #stream.ss<>}> : (!stream.strensor<|16(t2)x1(a2)x64(k0)x256(k1)xbf16, ["tile_6_1"]>, !stream.channel) -> ()
+    %14 = "stream.pull"(%13) <{spatial_index = #stream.ss<>}> : (!stream.channel) -> !stream.strensor<|16(t2)x1(a2)x64(k0)x256(k1)xbf16, ["tile_0_2"]>
+    %15 = "stream.gather"(%14) : (!stream.strensor<|16(t2)x1(a2)x64(k0)x256(k1)xbf16, ["tile_0_2"]>) -> !stream.strensor<|16(t2)x1(a2)x64(k0)x256(k1)xbf16, ["tile_0_2"]>
+    %16 = "stream.channel"() : () -> !stream.channel
+    "stream.push"(%9, %16) <{spatial_index = #stream.ss<>}> : (!stream.strensor<|16(t2)x1(a2)x256(k1)x64(k3)xbf16, ["tile_5_1"]>, !stream.channel) -> ()
+    %17 = "stream.pull"(%16) <{spatial_index = #stream.ss<>}> : (!stream.channel) -> !stream.strensor<|16(t2)x1(a2)x256(k1)x64(k3)xbf16, ["tile_0_4"]>
+    %18 = "stream.gather"(%17) : (!stream.strensor<|16(t2)x1(a2)x256(k1)x64(k3)xbf16, ["tile_0_4"]>) -> !stream.strensor<|16(t2)x1(a2)x256(k1)x64(k3)xbf16, ["tile_0_4"]>
+    %19 = "stream.computation_node"(%12, %15) <{kernel = "matmul_bf16_bf16_16_64_256", spatial_index = #stream.ss<0(p2)>}> : (!stream.strensor<16(t2)x1(t2)|16(k2)x64(k0)xbf16, ["tile_0_2"]>, !stream.strensor<|16(t2)x1(a2)x64(k0)x256(k1)xbf16, ["tile_0_2"]>) -> !stream.strensor<16(t2)x1(s2)|16(k2)x256(k1)xbf16, ["tile_0_2"]>
+    %20 = "stream.gather"(%19) : (!stream.strensor<16(t2)x1(s2)|16(k2)x256(k1)xbf16, ["tile_0_2"]>) -> !stream.strensor<16(t2)x1(s2)|16(k2)x256(k1)xbf16, ["tile_0_2"]>
+    %21 = "stream.channel"() : () -> !stream.channel
+    "stream.push"(%20, %21) <{spatial_index = #stream.ss<0(p2)>}> : (!stream.strensor<16(t2)x1(s2)|16(k2)x256(k1)xbf16, ["tile_0_2"]>, !stream.channel) -> ()
+    %22 = "stream.pull"(%21) <{spatial_index = #stream.ss<>}> : (!stream.channel) -> !stream.strensor<16(t2)|1(t2)x16(k2)x256(k1)xbf16, ["tile_1_1"]>
+    %23 = "stream.gather"(%22) : (!stream.strensor<16(t2)|1(t2)x16(k2)x256(k1)xbf16, ["tile_1_1"]>) -> !stream.strensor<16(t2)|1(t2)x16(k2)x256(k1)xbf16, ["tile_1_1"]>
+    %24 = "stream.channel"() : () -> !stream.channel
+    "stream.push"(%23, %24) <{spatial_index = #stream.ss<>}> : (!stream.strensor<16(t2)|1(t2)x16(k2)x256(k1)xbf16, ["tile_1_1"]>, !stream.channel) -> ()
+    %25 = "stream.pull"(%24) <{spatial_index = #stream.ss<>}> : (!stream.channel) -> !stream.strensor<16(t2)x1(t2)|16(k2)x256(k1)xbf16, ["tile_0_3"]>
+    %26 = "stream.gather"(%25) : (!stream.strensor<16(t2)x1(t2)|16(k2)x256(k1)xbf16, ["tile_0_3"]>) -> !stream.strensor<16(t2)x1(t2)|16(k2)x256(k1)xbf16, ["tile_0_3"]>
+    %27 = "stream.computation_node"(%26) <{kernel = "softmax_rows_causal_bf16_16_256_contiguous", spatial_index = #stream.ss<0(p2)>}> : (!stream.strensor<16(t2)x1(t2)|16(k2)x256(k1)xbf16, ["tile_0_3"]>) -> !stream.strensor<16(t2)x1(s2)|16(k2)x256(k1)xbf16, ["tile_0_3"]>
+    %28 = "stream.gather"(%27) : (!stream.strensor<16(t2)x1(s2)|16(k2)x256(k1)xbf16, ["tile_0_3"]>) -> !stream.strensor<16(t2)x1(s2)|16(k2)x256(k1)xbf16, ["tile_0_3"]>
+    %29 = "stream.channel"() : () -> !stream.channel
+    "stream.push"(%28, %29) <{spatial_index = #stream.ss<0(p2)>}> : (!stream.strensor<16(t2)x1(s2)|16(k2)x256(k1)xbf16, ["tile_0_3"]>, !stream.channel) -> ()
+    %30 = "stream.pull"(%29) <{spatial_index = #stream.ss<>}> : (!stream.channel) -> !stream.strensor<16(t2)|1(t2)x16(k2)x256(k1)xbf16, ["tile_1_1"]>
+    %31 = "stream.gather"(%30) : (!stream.strensor<16(t2)|1(t2)x16(k2)x256(k1)xbf16, ["tile_1_1"]>) -> !stream.strensor<16(t2)|1(t2)x16(k2)x256(k1)xbf16, ["tile_1_1"]>
+    %32 = "stream.channel"() : () -> !stream.channel
+    "stream.push"(%31, %32) <{spatial_index = #stream.ss<>}> : (!stream.strensor<16(t2)|1(t2)x16(k2)x256(k1)xbf16, ["tile_1_1"]>, !stream.channel) -> ()
+    %33 = "stream.pull"(%32) <{spatial_index = #stream.ss<>}> : (!stream.channel) -> !stream.strensor<16(t2)x1(t2)|16(k2)x256(k1)xbf16, ["tile_0_4"]>
+    %34 = "stream.gather"(%33) : (!stream.strensor<16(t2)x1(t2)|16(k2)x256(k1)xbf16, ["tile_0_4"]>) -> !stream.strensor<16(t2)x1(t2)|16(k2)x256(k1)xbf16, ["tile_0_4"]>
+    %35 = "stream.computation_node"(%34, %18) <{kernel = "matmul_bf16_bf16_16_256_64", spatial_index = #stream.ss<0(p2)>}> : (!stream.strensor<16(t2)x1(t2)|16(k2)x256(k1)xbf16, ["tile_0_4"]>, !stream.strensor<|16(t2)x1(a2)x256(k1)x64(k3)xbf16, ["tile_0_4"]>) -> !stream.strensor<16(t2)x1(s2)|16(k2)x64(k3)xbf16, ["tile_0_4"]>
+    %36 = "stream.gather"(%35) : (!stream.strensor<16(t2)x1(s2)|16(k2)x64(k3)xbf16, ["tile_0_4"]>) -> !stream.strensor<16(t2)x1(s2)|16(k2)x64(k3)xbf16, ["tile_0_4"]>
+    %37 = "stream.channel"() : () -> !stream.channel
+    "stream.push"(%36, %37) <{spatial_index = #stream.ss<0(p2)>}> : (!stream.strensor<16(t2)x1(s2)|16(k2)x64(k3)xbf16, ["tile_0_4"]>, !stream.channel) -> ()
+    %38 = "stream.pull"(%37) <{spatial_index = #stream.ss<>}> : (!stream.channel) -> !stream.strensor<16(t2)|1(t2)x16(k2)x64(k3)xbf16, ["tile_0_1"]>
+    %39 = "stream.gather"(%38) : (!stream.strensor<16(t2)|1(t2)x16(k2)x64(k3)xbf16, ["tile_0_1"]>) -> !stream.strensor<16(t2)|1(t2)x16(k2)x64(k3)xbf16, ["tile_0_1"]>
+    %40 = "stream.channel"() : () -> !stream.channel
+    "stream.push"(%39, %40) <{spatial_index = #stream.ss<>}> : (!stream.strensor<16(t2)|1(t2)x16(k2)x64(k3)xbf16, ["tile_0_1"]>, !stream.channel) -> ()
+    %41 = "stream.pull"(%40) <{spatial_index = #stream.ss<>}> : (!stream.channel) -> !stream.strensor<256(c2)x64(c3)xbf16, ["tile_0_0"]>
+    %42 = "stream.gather"(%41) : (!stream.strensor<256(c2)x64(c3)xbf16, ["tile_0_0"]>) -> !stream.strensor<256(c2)x64(c3)xbf16, ["tile_0_0"]>
+    "stream.yield"(%42) : (!stream.strensor<256(c2)x64(c3)xbf16, ["tile_0_0"]>) -> ()
+  }) : () -> ()
+}) : () -> ()
+
+
+rc=0 tag=k1c_s256_c2
+  OK  cores=6 median=266.0us min=264.8 max=270.9 sd=1.2 errs=0/16384 maxabs=4.883e-02 padded=False build=16s
+rc=0 tag=k1c_s256_c4
+  OK  cores=12 median=277.0us min=276.0 max=283.8 sd=2.1 errs=0/16384 maxabs=4.883e-02 padded=False build=68s
+rc=0 tag=k1c_s256_c8
+  OK  cores=24 median=331.9us min=330.0 max=380.1 sd=13.2 errs=0/16384 maxabs=4.883e-02 padded=False build=17s
+rc=0 tag=k1_s256_c4
+  OK  cores=12 median=240.3us min=238.6 max=242.0 sd=0.9 errs=0/16384 maxabs=2.148e-02 padded=False build=68s
+rc=0 tag=k3c_s256
+  OK  cores=4 median=357.7us min=356.6 max=361.2 sd=1.1 errs=0/16384 maxabs=4.883e-02 padded=False build=8s
+=== 2B: flash seq sweep at c4 ===
+Terminated
+rc=143 tag=flash_s512_c4

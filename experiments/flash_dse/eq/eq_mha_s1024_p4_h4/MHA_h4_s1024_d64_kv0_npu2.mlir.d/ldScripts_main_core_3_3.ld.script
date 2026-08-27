@@ -1,0 +1,152 @@
+
+MEMORY
+{
+   program (RX) : ORIGIN = 0, LENGTH = 0x0020000
+   data (!RX) : ORIGIN = 0x7E010, LENGTH = 0x1FF0
+}
+ENTRY(__start)
+SECTIONS
+{
+  . = 0x0;
+  .text : {
+     /* the __start symbol has to come at address zero. */
+     *crt0.o(.text*)
+     _ctors_start = .;
+     _init_array_start = .;
+     KEEP(SORT(*.init_array))
+     _ctors_end = .;
+     _init_array_end = .;
+     _dtors_start = .;
+     _dtors_end = .;
+     *(.text*)
+  } > program
+  .data : {
+     *(.data*)
+     *(.rodata*)
+  } > data
+  .comment : {
+     *(.comment*)
+  }
+  .symtab : {
+     *(.symtab)
+  }
+  .shstrtab : {
+     *(.shstrtab)
+  }
+  .strtab : {
+     *(.strtab)
+  }
+  .stack_sizes : {
+     *(.stack_sizes)
+  }
+
+. = 0x70000;
+_sp_start_value_DM_stack = .;
+. += 0xD00; /* stack */
+. = 0x40D00;
+memA3_buff_0 = .;
+. += 0x2000;
+. = 0x44000;
+memA3_buff_1 = .;
+. += 0x2000;
+. = 0x48000;
+memQ3_cons_buff_0 = .;
+. += 0x2000;
+. = 0x4C000;
+memQ3_cons_buff_1 = .;
+. += 0x2000;
+. = 0x46000;
+memK_3_cons_buff_0 = .;
+. += 0x2000;
+. = 0x4A000;
+memK_3_cons_buff_1 = .;
+. += 0x2000;
+. = 0x4E000;
+mha_rtpss_3_stage0 = .;
+. += 0x10;
+. = 0x42D00;
+idx_buffer_qk_3 = .;
+. += 0x8;
+. = 0x52D00;
+scaleOF2_buff_0 = .;
+. += 0x200;
+. = 0x56000;
+scaleOF2_buff_1 = .;
+. += 0x200;
+. = 0x50D00;
+memP2_buff_0 = .;
+. += 0x2000;
+. = 0x54000;
+memP2_buff_1 = .;
+. += 0x2000;
+. = 0x58000;
+outA2_cons_buff_0 = .;
+. += 0x2000;
+. = 0x5C000;
+outA2_cons_buff_1 = .;
+. += 0x2000;
+. = 0x5E000;
+mha_rtpss_2_stage1 = .;
+. += 0x10;
+. = 0x52F00;
+idx_buffer_softmax_2 = .;
+. += 0x8;
+. = 0x5A000;
+scale_buffer_softmax_2 = .;
+. += 0x200;
+. = 0x60D00;
+outP3_cons_buff_0 = .;
+. += 0x2000;
+. = 0x64000;
+outP3_cons_buff_1 = .;
+. += 0x2000;
+. = 0x68000;
+outO3_buff_0 = .;
+. += 0x2000;
+. = 0x6C000;
+outO3_buff_1 = .;
+. += 0x2000;
+. = 0x66000;
+memV_3_cons_buff_0 = .;
+. += 0x2000;
+. = 0x6A000;
+memV_3_cons_buff_1 = .;
+. += 0x2000;
+. = 0x6E000;
+mha_rtpss_3_stage2 = .;
+. += 0x10;
+. = 0x62D00;
+idx_buffer_pv_3 = .;
+. += 0x8;
+. = 0x72D00;
+scaleOF3_buff_0 = .;
+. += 0x200;
+. = 0x76000;
+scaleOF3_buff_1 = .;
+. += 0x200;
+. = 0x70D00;
+memP3_buff_0 = .;
+. += 0x2000;
+. = 0x74000;
+memP3_buff_1 = .;
+. += 0x2000;
+. = 0x78000;
+outA3_cons_buff_0 = .;
+. += 0x2000;
+. = 0x7C000;
+outA3_cons_buff_1 = .;
+. += 0x2000;
+. = 0x7E000;
+mha_rtpss_3_stage1 = .;
+. += 0x10;
+. = 0x72F00;
+idx_buffer_softmax_3 = .;
+. += 0x8;
+. = 0x7A000;
+scale_buffer_softmax_3 = .;
+. += 0x200;
+  .bss : { *(.bss*) } > data
+}
+INPUT(/home/micas/iron-stream-dse/experiments/flash_dse/eq/eq_mha_s1024_p4_h4/MHA_h4_s1024_d64_kv0_npu2.mlir.d/mha.o)
+INPUT(/home/micas/iron-stream-dse/experiments/flash_dse/eq/eq_mha_s1024_p4_h4/MHA_h4_s1024_d64_kv0_npu2.mlir.d/mha_passThrough.o)
+PROVIDE(main = core_3_3);

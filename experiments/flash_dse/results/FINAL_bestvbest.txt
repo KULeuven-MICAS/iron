@@ -1,0 +1,45 @@
+FULL 12- AND 24-CORE GRID, window-equalised (persistent window), heads=1
+
+-- seq 256 --
+   mha  12 cores (p4): n=80 min=111.9 med=115.7 mean=116.9 max=170.3 sd=6.6 errs=3/16384
+   ours 12 cores (c4): n=80 min=288.3 med=293.9 mean=294.7 max=351.4 sd=8.0 errs=0/16384
+
+-- seq 512 --
+   mha  12 cores (p4): n=80 min=223.4 med=224.9 mean=227.2 max=257.1 sd=4.9 errs=0/32768
+   ours 12 cores (c4): n=80 min=387.5 med=391.9 mean=391.3 max=398.2 sd=2.8 errs=0/32768
+   mha  24 cores (p8): n=80 min=155.1 med=158.9 mean=159.0 max=167.2 sd=2.1 errs=0/32768
+   ours 24 cores (c8): n=80 min=442.8 med=448.2 mean=448.7 max=463.9 sd=3.3 errs=0/32768
+
+-- seq 1024 --
+   mha  12 cores (p4): n=80 min=580.7 med=586.7 mean=587.0 max=613.3 sd=5.4 errs=2/65536
+   ours 12 cores (c4): n=80 min=708.6 med=715.7 mean=717.4 max=771.8 sd=10.1 errs=0/65536
+   mha  24 cores (p8): n=80 min=349.4 med=350.5 mean=350.9 max=359.3 sd=1.6 errs=2/65536
+   ours 24 cores (c8): n=125 min=625.1 med=626.6 mean=627.2 max=635.5 sd=1.9 errs=0/65536
+
+-- seq 2048 --
+   mha  12 cores (p4): n=80 min=1805.3 med=1825.0 mean=1913.6 max=2435.3 sd=178.5 errs=10/131072
+   ours 12 cores (c4): n=80 min=1856.3 med=1865.6 mean=1865.7 max=1906.6 sd=8.7 errs=0/131072
+   mha  24 cores (p8): n=80 min=1003.8 med=1005.2 mean=1007.3 max=1039.6 sd=7.4 errs=10/131072
+   ours 24 cores (c8): n=80 min=1241.5 med=1242.9 mean=1244.2 max=1275.5 sd=5.0 errs=0/131072
+
+-- seq 4096 --
+   mha  12 cores (p4): n=80 min=6299.7 med=6310.6 mean=6314.7 max=6350.8 sd=9.7 errs=3/262144
+   ours 12 cores (c4): n=80 min=6173.5 med=6187.2 mean=6193.8 max=6265.6 sd=22.5 errs=0/262144
+   mha  24 cores (p8): n=80 min=3328.4 med=3356.0 mean=3356.0 max=3393.4 sd=8.6 errs=3/262144
+   ours 24 cores (c8): n=80 min=3467.7 med=3471.1 mean=3473.9 max=3502.7 sd=6.1 errs=0/262144
+
+-- seq 8192 --
+   mha  12 cores (p4): n=80 min=23446.8 med=23477.4 mean=23479.6 max=23626.3 sd=29.1 errs=1/524288
+   ours 12 cores (c4): n=80 min=22893.2 med=22929.0 mean=22928.6 max=22986.0 sd=21.5 errs=0/524288
+   mha  24 cores (p8): n=80 min=12055.0 med=12380.3 mean=12337.8 max=12664.4 sd=211.1 errs=1/524288
+   ours 24 cores (c8): n=80 min=11971.7 med=12297.7 mean=12222.6 max=12678.4 sd=176.7 errs=0/524288
+
+BEST vs BEST
+
+   seq |              iron/mha best |                  ours best | verdict
+   256 |     115.7 us (p4, 12 cores) |     293.9 us (c4, 12 cores) | iron/mha by 2.541x
+   512 |     158.9 us (p8, 24 cores) |     391.9 us (c4, 12 cores) | iron/mha by 2.466x
+  1024 |     350.5 us (p8, 24 cores) |     626.6 us (c8, 24 cores) | iron/mha by 1.788x
+  2048 |    1005.2 us (p8, 24 cores) |    1242.9 us (c8, 24 cores) | iron/mha by 1.236x
+  4096 |    3356.0 us (p8, 24 cores) |    3471.1 us (c8, 24 cores) | iron/mha by 1.034x
+  8192 |   12380.3 us (p8, 24 cores) |   12297.7 us (c8, 24 cores) | OURS by 1.007x

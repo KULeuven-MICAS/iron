@@ -1,0 +1,1 @@
+Graph saved to outputs/whole_array_strix-mha_k1_c8_r0_1_2_flash_2048_64-4_row_8_col-4321ffed/workload_graph.png

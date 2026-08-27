@@ -1,0 +1,70 @@
+W0825 12:38:40.423000 1575221 torch/onnx/_internal/exporter/_registration.py:107] torchvision is not installed. Skipping torchvision::nms
+W0825 12:38:40.424000 1575221 torch/onnx/_internal/exporter/_registration.py:107] torchvision is not installed. Skipping torchvision::roi_align
+W0825 12:38:40.424000 1575221 torch/onnx/_internal/exporter/_registration.py:107] torchvision is not installed. Skipping torchvision::roi_pool
+W0825 12:38:40.424000 1575221 torch/onnx/_internal/exporter/_registration.py:107] torchvision is not installed. Skipping torchvision::deform_conv2d
+/usr/lib/python3.12/copyreg.py:99: FutureWarning: `isinstance(treespec, LeafSpec)` is deprecated, use `isinstance(treespec, TreeSpec) and treespec.is_leaf()` instead.
+  return cls.__new__(cls, *args)
+W0825 12:38:41.133000 1575221 torch/onnx/_internal/exporter/_registration.py:107] torchvision is not installed. Skipping torchvision::nms
+W0825 12:38:41.134000 1575221 torch/onnx/_internal/exporter/_registration.py:107] torchvision is not installed. Skipping torchvision::roi_align
+W0825 12:38:41.134000 1575221 torch/onnx/_internal/exporter/_registration.py:107] torchvision is not installed. Skipping torchvision::roi_pool
+W0825 12:38:41.134000 1575221 torch/onnx/_internal/exporter/_registration.py:107] torchvision is not installed. Skipping torchvision::deform_conv2d
+/usr/lib/python3.12/copyreg.py:99: FutureWarning: `isinstance(treespec, LeafSpec)` is deprecated, use `isinstance(treespec, TreeSpec) and treespec.is_leaf()` instead.
+  return cls.__new__(cls, *args)
+Traceback (most recent call last):
+  File "/home/micas/stream-dse-iron-slides/260824_full_array/harness/measure_one.py", line 91, in <module>
+    op.compile()
+  File "/home/micas/iron-stream-dse/iron/common/base.py", line 76, in compile
+    self.set_up_artifacts()
+  File "/home/micas/iron-stream-dse/iron/common/sequence.py", line 443, in set_up_artifacts
+    self._dispatch.set_up_artifacts(self)
+  File "/home/micas/iron-stream-dse/iron/common/sequence.py", line 81, in set_up_artifacts
+    mlir_artifact = self.build_fused_mlir(seq)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/micas/iron-stream-dse/iron/common/sequence.py", line 101, in build_fused_mlir
+    designs, design_of = seq.unique_designs()
+                         ^^^^^^^^^^^^^^^^^^^^
+  File "/home/micas/iron-stream-dse/iron/common/sequence.py", line 327, in unique_designs
+    key = op.design_key() if self.share_designs else None
+          ^^^^^^^^^^^^^^^
+  File "/home/micas/iron-stream-dse/iron/operators/mha_prefill_stream/op.py", line 122, in design_key
+    return self._design.group_digest(self.group_index, **self._dims())
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/micas/iron-stream-dse/iron/operators/mha_prefill_stream/stream_design.py", line 559, in group_digest
+    return digest(_group_text(group_index, **dims))
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/micas/iron-stream-dse/iron/operators/mha_prefill_stream/stream_design.py", line 541, in _group_text
+    return group_text(
+           ^^^^^^^^^^^
+  File "/home/micas/iron-stream-dse/iron/common/stream/design.py", line 109, in group_text
+    generate()
+  File "/home/micas/iron-stream-dse/iron/operators/mha_prefill_stream/stream_design.py", line 544, in <lambda>
+    lambda: _run_codegen(seq_len, d_head, npu, k, causal, flash),
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/micas/iron-stream-dse/iron/operators/mha_prefill_stream/stream_design.py", line 514, in _run_codegen
+    optimize_allocation_co(
+  File "/home/micas/stream/stream/api.py", line 177, in optimize_allocation_co_with_mapping
+    answers = mainstage.run()
+              ^^^^^^^^^^^^^^^
+  File "/home/micas/stream/stream/stages/stage.py", line 59, in run
+    for ctx in self.list_of_callables[0](self.list_of_callables[1:], self.ctx).run():
+  File "/home/micas/stream/stream/stages/codegen/aie_code_generation.py", line 97, in run
+    for ctx in sub_stage.run():
+  File "/home/micas/stream/stream/stages/parsing/accelerator_parser.py", line 32, in run
+    yield from sub_stage.run()
+  File "/home/micas/stream/stream/stages/parsing/onnx_model_parser.py", line 48, in run
+    yield from sub_stage.run()
+  File "/home/micas/stream/stream/stages/parsing/mapping_parser.py", line 26, in run
+    mapping = self.mapping_parser.run()
+              ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/micas/stream/stream/parser/mapping_parser.py", line 26, in run
+    return self.parse_mapping(mapping_data)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/micas/stream/stream/parser/mapping_parser.py", line 39, in parse_mapping
+    all_mappings = mapping_factory.create()
+                   ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/micas/stream/stream/parser/mapping_factory.py", line 48, in create
+    kernel = self.create_kernel(mapping_data)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/micas/stream/stream/parser/mapping_factory.py", line 99, in create_kernel
+    raise ValueError(f"Unknown kernel name {kernel_name!r}. Known kernels: {sorted(known_kernels)}")
+ValueError: Unknown kernel name 'partial_softmax_tiled'. Known kernels: ['eltwise_mul', 'gemm', 'matmul_softmax', 'matvec', 'partial_softmax', 'silu', 'softmax']

@@ -1,0 +1,14 @@
+W0826 12:48:25.736000 1949107 torch/onnx/_internal/exporter/_registration.py:107] torchvision is not installed. Skipping torchvision::nms
+W0826 12:48:25.737000 1949107 torch/onnx/_internal/exporter/_registration.py:107] torchvision is not installed. Skipping torchvision::roi_align
+W0826 12:48:25.737000 1949107 torch/onnx/_internal/exporter/_registration.py:107] torchvision is not installed. Skipping torchvision::roi_pool
+W0826 12:48:25.737000 1949107 torch/onnx/_internal/exporter/_registration.py:107] torchvision is not installed. Skipping torchvision::deform_conv2d
+/usr/lib/python3.12/copyreg.py:99: FutureWarning: `isinstance(treespec, LeafSpec)` is deprecated, use `isinstance(treespec, TreeSpec) and treespec.is_leaf()` instead.
+  return cls.__new__(cls, *args)
+Traceback (most recent call last):
+  File "/home/micas/stream-dse-iron-slides/260824_full_array/harness/measure_one.py", line 98, in <module>
+    run()
+  File "/home/micas/iron-stream-dse/iron/common/sequence.py", line 538, in __call__
+    self._run()
+  File "/home/micas/iron-stream-dse/iron/common/sequence.py", line 661, in _run
+    raise RuntimeError(f"Kernel execution failed with return code {ret_code}")
+RuntimeError: Kernel execution failed with return code ert_cmd_state.ERT_CMD_STATE_TIMEOUT

@@ -22,6 +22,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
+import os
+
 import torch
 from onnx import defs
 from onnxscript import opset18
@@ -133,9 +135,16 @@ def _mha_artifacts(base_dir, kernel_dir):
             "mha.o",
             dependencies=[
                 SourceArtifact(base_dir / "aie_kernels" / kernel_dir / f"{name}.cc")
-                for name in ("mha", "mm", "softmax")
+                for name in ("mha", "mm", "softmax", "fast/softmax_fast")
             ],
             extra_flags=[
+                # The tuned softmax body is the default; the reference one is a
+                # rebuild away, so an A/B never means editing a kernel.
+                *(
+                    ["-DSOFTMAX_REFERENCE"]
+                    if os.environ.get("IRON_SOFTMAX_REFERENCE", "0") == "1"
+                    else []
+                ),
                 "-Dbf16_bf16_ONLY",
                 f"-DDIM_M={FLASH_TILE}",
                 f"-DDIM_K={FLASH_TILE}",

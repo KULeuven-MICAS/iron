@@ -1,0 +1,1 @@
+/home/micas/iron-stream-dse/experiments/kernel_2x2/ours_fast/eq_ours_s4096_c8_h8/op0_mm_64_64_64.o.d

@@ -1,0 +1,11 @@
+=== 2B: flash seq sweep at c4 ===
+rc=0 tag=flash_s512_c4
+  OK  cores=12 median=392.3us min=391.3 max=394.2 sd=0.9 errs=0/32768 maxabs=4.883e-02 padded=False build=8s
+rc=0 tag=flash_s768_c4
+  OK  cores=12 median=529.7us min=528.8 max=549.6 sd=4.7 errs=0/49152 maxabs=4.297e-02 padded=False build=50s
+rc=0 tag=flash_s1536_c4
+  OK  cores=12 median=1206.5us min=1201.5 max=1249.4 sd=12.6 errs=0/98304 maxabs=3.906e-02 padded=False build=52s
+rc=0 tag=flash_s2048_c4
+  OK  cores=12 median=1906.2us min=1871.6 max=1922.3 sd=11.6 errs=0/131072 maxabs=4.688e-02 padded=False build=8s
+Terminated
+rc=143 tag=flash_s3072_c4

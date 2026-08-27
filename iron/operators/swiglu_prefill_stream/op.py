@@ -146,9 +146,20 @@ class SwiGLUPrefillStream(OperatorSequence):
     """
 
     def __init__(
-        self, seq_len, embedding_dim, hidden_dim, k=1, context=None, share_designs=True
+        self,
+        seq_len,
+        embedding_dim,
+        hidden_dim,
+        k=None,
+        context=None,
+        share_designs=True,
     ):
-        from iron.operators.swiglu_prefill_stream.stream_design import trace_size
+        from iron.operators.swiglu_prefill_stream.stream_design import (
+            default_groups,
+            trace_size,
+        )
+
+        k = default_groups(hidden_dim) if k is None else k
 
         ports, inputs, outputs = _wiring(seq_len, embedding_dim, hidden_dim, k)
         groups = [
