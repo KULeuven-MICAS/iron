@@ -96,6 +96,66 @@ def design_findings(mlir: str, objects: Collection[str] | None = None) -> list[s
     return findings
 
 
+# One tile's DMA channels, as AIE2TargetModel reports them for WireBundle::DMA.
+DMA_CHANNELS = {0: 2, 1: 6}  # shim row, memory row; every other row is a compute tile
+COMPUTE_DMA_CHANNELS = 2
+
+_TILE = re.compile(r"%(\d+)\s*=\s*aie\.tile\((\d+),\s*(\d+)\)")
+_FIFO = re.compile(r"aie\.objectfifo @(\S+?)\((%\d+)(.*?),\s*\{([^}]*)\}")
+
+
+def dma_findings(mlir: str) -> list[str]:
+    """Tiles the generated design asks for more DMA channels than they have.
+
+    aiecc reports this as ``number of input DMA channel exceeded`` against a tile, with
+    nothing tying it back to the mapping that chose it, so it is checked here instead. A
+    fifo with one consumer, no layout transform and a neighbouring tile stays in the memory
+    the two already share and costs no channel; every other fifo spends one on the producer
+    and one on each consumer.
+    """
+    tiles = {f"%{m[1]}": (int(m[2]), int(m[3])) for m in _TILE.finditer(mlir)}
+    incoming: dict[tuple[int, int], int] = {}
+    outgoing: dict[tuple[int, int], int] = {}
+    for line in mlir.splitlines():
+        found = _FIFO.search(line)
+        if not found:
+            continue
+        _, producer, between, consumers = found.groups()
+        reached = [c for c in re.findall(r"%\d+", consumers) if c in tiles]
+        if producer not in tiles or not reached:
+            continue
+        source = tiles[producer]
+        transformed = "dimensionsToStream" in between or "dimensionsFromStream" in line
+        if (
+            len(reached) == 1
+            and not transformed
+            and _neighbours(source, tiles[reached[0]])
+        ):
+            continue
+        outgoing[source] = outgoing.get(source, 0) + 1
+        for consumer in reached:
+            incoming[tiles[consumer]] = incoming.get(tiles[consumer], 0) + 1
+    findings = []
+    for tile in sorted(set(incoming) | set(outgoing)):
+        limit = DMA_CHANNELS.get(tile[1], COMPUTE_DMA_CHANNELS)
+        for direction, spent in (
+            ("in", incoming.get(tile, 0)),
+            ("out", outgoing.get(tile, 0)),
+        ):
+            if spent > limit:
+                findings.append(
+                    f"tile{tile} takes {spent} {direction} DMA channels of {limit}"
+                )
+    return findings
+
+
+def _neighbours(one: tuple[int, int], other: tuple[int, int]) -> bool:
+    """Two compute tiles that share a memory module, per ``isLegalMemAffinity``."""
+    if one[1] < 2 or other[1] < 2:
+        return False
+    return abs(one[0] - other[0]) + abs(one[1] - other[1]) == 1
+
+
 # Implementation details that belong to iron.common.stream, and the helper each one
 # shows was copied rather than imported.
 COPIED_PLUMBING = {
@@ -186,3 +246,14 @@ def test_the_fused_score_kernel_maps_onto_its_cores(tmp_path):
     kernels = {layer["name"]: layer["kernel"]["name"] for layer in mapping["layers"]}
     assert kernels[mha.SCORE_SOFTMAX_NODE] == "matmul_softmax"
     assert group_findings(mapping, 0) == []
+
+
+@pytest.mark.parametrize("design, dims, k, index", CASES)
+def test_generated_group_fits_the_dma_channels_its_tiles_have(design, dims, k, index):
+    path = design._design_paths(*dims, k=k)[index]
+    try:
+        with open(path) as handle:
+            mlir = handle.read()
+    except FileNotFoundError:
+        pytest.skip("design not generated")
+    assert dma_findings(mlir) == []
