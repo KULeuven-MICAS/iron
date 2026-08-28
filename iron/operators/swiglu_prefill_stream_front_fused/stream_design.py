@@ -265,6 +265,16 @@ def trace_tiles():
     return int(os.environ.get("IRON_TRACE_NTILES", "1"))
 
 
+def trace_memtiles():
+    """Number of memory tiles to trace; set IRON_TRACE_NMEMTILES=0 to disable."""
+    return int(os.environ.get("IRON_TRACE_NMEMTILES", "1"))
+
+
+def trace_shimtiles():
+    """Number of shim tiles to trace; set IRON_TRACE_NSHIMTILES=0 to disable."""
+    return int(os.environ.get("IRON_TRACE_NSHIMTILES", "1"))
+
+
 def _design_paths(seq_len, embedding_dim, hidden_dim):
     """Where stream-dse writes each group's MLIR.
 
@@ -352,7 +362,90 @@ def region_module(mlir_text: str, func_prefix: str = ""):
     from aie.extras.context import mlir_mod_ctx
 
     with mlir_mod_ctx():
-        return ir.Module.parse(_prefixed(mlir_text, func_prefix))
+        module = ir.Module.parse(_prefixed(mlir_text, func_prefix))
+        _add_auxiliary_traces(module)
+        return module
+
+
+def _add_auxiliary_traces(module):
+    """Add optional memtile and shim-tile traces to a stream-dse module."""
+    if not trace_size():
+        return
+
+    from aie.dialects import aie
+    from aie.ir import InsertionPoint
+    from aie.utils.trace.events import MemTileEvent, PacketType, ShimTileEvent
+
+    device = next(
+        operation
+        for operation in module.body.operations
+        if str(operation.operation.name) == "aie.device"
+    )
+    device_block = device.operation.regions[0].blocks[0]
+    sequence = next(
+        operation
+        for operation in device_block.operations
+        if str(operation.operation.name) == "aie.runtime_sequence"
+    )
+    sequence_block = sequence.operation.regions[0].blocks[0]
+    tiles = [
+        operation
+        for operation in device_block.operations
+        if str(operation.operation.name) == "aie.tile"
+    ]
+    memtiles = [tile for tile in tiles if tile.is_mem_tile()]
+    shimtiles = [tile for tile in tiles if tile.is_shim_tile()]
+    trace_specs = [
+        (
+            tile,
+            f"trace_memtile_iron_{index}",
+            MemTileEvent,
+            PacketType.MEMTILE,
+        )
+        for index, tile in enumerate(memtiles[: max(0, trace_memtiles())])
+    ] + [
+        (
+            tile,
+            f"trace_shimtile_iron_{index}",
+            ShimTileEvent,
+            PacketType.SHIMTILE,
+        )
+        for index, tile in enumerate(shimtiles[: max(0, trace_shimtiles())])
+    ]
+
+    events = {
+        MemTileEvent: (
+            MemTileEvent.GROUP_DMA_ACTIVITY,
+            MemTileEvent.DMA_S2MM_SEL0_START_TASK,
+            MemTileEvent.DMA_S2MM_SEL0_FINISHED_TASK,
+            MemTileEvent.DMA_MM2S_SEL0_START_TASK,
+            MemTileEvent.DMA_MM2S_SEL0_FINISHED_TASK,
+        ),
+        ShimTileEvent: (
+            ShimTileEvent.GROUP_DMA_ACTIVITY,
+            ShimTileEvent.DMA_S2MM_0_START_TASK,
+            ShimTileEvent.DMA_S2MM_0_FINISHED_TASK,
+            ShimTileEvent.DMA_MM2S_0_START_TASK,
+            ShimTileEvent.DMA_MM2S_0_FINISHED_TASK,
+        ),
+    }
+    names = []
+    for tile, name, event_type, packet_type in trace_specs:
+        with InsertionPoint.at_block_terminator(device_block):
+
+            @aie.trace(tile, name)
+            def trace_body():
+                aie.trace_packet(type=packet_type)
+                for event in events[event_type]:
+                    aie.trace_event(event)
+                aie.trace_start(broadcast=15)
+                aie.trace_stop(broadcast=14)
+
+        names.append(name)
+
+    with InsertionPoint.at_block_begin(sequence_block):
+        for name in names:
+            aie.trace_start_config(name)
 
 
 def _group_text(group_index, *, seq_len, embedding_dim, hidden_dim, npu) -> str:
