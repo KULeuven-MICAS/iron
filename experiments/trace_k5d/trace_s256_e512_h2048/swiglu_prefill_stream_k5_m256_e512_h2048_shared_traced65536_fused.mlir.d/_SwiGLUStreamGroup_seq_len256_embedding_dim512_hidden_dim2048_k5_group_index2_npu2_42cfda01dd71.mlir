@@ -1,0 +1,1 @@
+/home/micas/iron-stream-dse/experiments/trace_k5d/trace_s256_e512_h2048/_SwiGLUStreamGroup_seq_len256_embedding_dim512_hidden_dim2048_k5_group_index2_npu2_42cfda01dd71.mlir

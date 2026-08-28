@@ -18,6 +18,7 @@ from aie.dialects import aie, aiex, memref
 from aie.extras.context import mlir_mod_ctx
 import ml_dtypes
 
+import os
 from typing import Any
 
 from . import (
@@ -36,21 +37,25 @@ RESET_DEVICE = "reset_device"
 # ##########################################################################
 
 
-def trace_argument_layout(arg_counts: dict[str, int], trace_size: int):
+def trace_argument_layout(
+    arg_counts: dict[str, int], trace_size: int, traced: str | None = None
+):
     """Buffer slots for the fused runtime sequence, as (consolidated, trace, count).
 
-    Lowering patches a trace address against the dispatched kernel, not the callee, so
-    each operator needs its buffer at the index it uses. The rest take what is left.
+    Lowering patches a trace address against the dispatched kernel, not the callee, so an
+    operator's buffer has to sit at the index it uses -- which is how many arguments it
+    takes. Two operators taking the same number would want the same slot, so ``traced``
+    names the one to instrument and the others go untraced.
     """
     if not trace_size:
         return [0, 1, 2], {}, 3
-    trace_slots = dict(arg_counts)
+    trace_slots = {n: c for n, c in arg_counts.items() if traced in (None, n)}
     counts = list(trace_slots.values())
     shared = sorted({n for n in counts if counts.count(n) > 1})
     if shared:
         raise NotImplementedError(
-            "operators taking the same number of arguments would share one trace "
-            f"buffer (slots {shared}); trace them in separate dispatches"
+            "operators taking the same number of arguments would share one trace buffer "
+            f"(slots {shared}); set IRON_TRACE_OP to one of {sorted(trace_slots)}"
         )
     trace_indices = sorted(set(counts))
     consolidated_idx = list(islice((i for i in count() if i not in trace_indices), 3))
@@ -243,6 +248,7 @@ def fuse_mlir(artifact: SequenceMLIRArtifact) -> None:
             consolidated_idx, trace_slots, n_args = trace_argument_layout(
                 {name: len(sequence_arg_types[name]) for name, *_ in artifact.runlist},
                 trace_size,
+                os.environ.get("IRON_TRACE_OP") or None,
             )
             trace_indices = sorted(set(trace_slots.values()))
 
@@ -352,7 +358,7 @@ def fuse_mlir(artifact: SequenceMLIRArtifact) -> None:
                             buffer_ssa_values.append(reinterpreted)
 
                         # Trace lowering appends a buffer to the callee's signature.
-                        if trace_size:
+                        if op_name in trace_slots:
                             buffer_ssa_values.append(all_bufs[trace_slots[op_name]])
 
                         # Run Op
