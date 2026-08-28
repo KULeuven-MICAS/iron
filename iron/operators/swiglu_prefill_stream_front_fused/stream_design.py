@@ -247,10 +247,22 @@ def build_inputs(seq_len, embedding_dim, hidden_dim, output_dir):
 def _experiment_id(seq_len, embedding_dim, hidden_dim):
     grid = array()
     hardware = os.path.splitext(os.path.basename(ACCELERATOR))[0]
+
+    trace_suffix = ""
+    if trace_size():
+        trace_suffix = f"-traced_{trace_size()}_{trace_tiles()}"
     return (
-        f"{hardware}-swiglu_fused_front_{seq_len}_{embedding_dim}_{hidden_dim}"
+        f"{hardware}-swiglu_fused_front{trace_suffix}_{seq_len}_{embedding_dim}_{hidden_dim}"
         f"-{grid.num_rows}_row_{grid.num_columns}_col"
     )
+
+
+def trace_size():
+    return int(os.environ.get("IRON_TRACE_SIZE", "0"))
+
+
+def trace_tiles():
+    return int(os.environ.get("IRON_TRACE_NTILES", "1"))
 
 
 def _design_paths(seq_len, embedding_dim, hidden_dim):
@@ -293,7 +305,8 @@ def _run_codegen(seq_len, embedding_dim, hidden_dim, npu):
         output_path=OUTPUT_ROOT,
         skip_if_exists=False,
         enable_codegen=True,
-        trace_size=0,
+        trace_size=trace_size(),
+        trace_max_tiles=trace_tiles(),
         nb_cols_to_use=grid.num_columns,
         npu=npu,
         backend=BACKEND,

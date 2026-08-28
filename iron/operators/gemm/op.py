@@ -38,6 +38,7 @@ class GEMM(MLIROperator):
     dtype_out: str = field(default="bf16", repr=False)
     use_scalar: bool = field(default=False, repr=False)
     separate_c_tiles: bool = field(default=False, repr=False)
+    trace_size: int = field(default=0, repr=False)
     context: object = field(default=None, repr=False)
 
     _name_aliases: ClassVar[Dict[str, str]] = {
@@ -75,6 +76,11 @@ class GEMM(MLIROperator):
         MLIROperator.__init__(self, context=self.context)
 
     @property
+    def name(self):
+        name = super().name
+        return f"{name}_tr{self.trace_size}" if self.trace_size else name
+
+    @property
     def _kernel_flags_suffix(self):
         """Suffix encoding compile-time flags that affect the kernel binary."""
         return f"_{int(self.prio_accuracy)}_{int(self.emulate_bf16_mmul_with_bfp16)}_{int(self.round_conv_even)}"
@@ -103,7 +109,7 @@ class GEMM(MLIROperator):
                     "emulate_bf16_mmul_with_bfp16": self.emulate_bf16_mmul_with_bfp16,
                     "prio_accuracy": self.prio_accuracy,
                     "separate_c_tiles": int(self.separate_c_tiles),
-                    "trace_size": 0,
+                    "trace_size": self.trace_size,
                     "generate_taps": False,
                     "kernel_object": f"gemm_{self.tile_m}x{self.tile_k}x{self.tile_n}_{int(self.b_col_maj)}_{int(self.c_col_maj)}{self._kernel_flags_suffix}.o",
                 },

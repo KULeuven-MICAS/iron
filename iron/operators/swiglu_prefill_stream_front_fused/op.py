@@ -15,6 +15,7 @@ from iron.common import (
 from iron.common.device_utils import get_kernel_dir
 from iron.common.sequence import OperatorSequence
 from iron.common.stream.ops import ELTWISE_MUL, GEMM, SILU, SWIGLU_FUSED_FRONT
+from iron.operators.swiglu_prefill_stream_front_fused.stream_design import trace_size
 
 
 @dataclass
@@ -161,6 +162,7 @@ class SwiGLUPrefillStreamFrontFused(OperatorSequence):
             input_args=inputs,
             output_args=outputs,
             extra_flags=["--dynamic-objFifos"],
+            trace_size=trace_size(),
             share_designs=share_designs,
             context=context,
         )

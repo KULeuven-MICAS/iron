@@ -768,7 +768,9 @@ def my_matmul(
 
     # Create the program from the device type and runtime
     my_program = Program(dev_ty, rt, workers=workers)
-    maybe_enable_trace(my_program, trace_size, workers)
+    # The bottom compute row provides a routable trace path with GEMM's DMA
+    # topology. Reversing the list keeps the first traced workers there.
+    maybe_enable_trace(my_program, trace_size, list(reversed(workers)))
 
     # Place components (assign them resources on the device) and generate an MLIR module.
     # This is what runs the sequence body, so it must happen before the taps it
