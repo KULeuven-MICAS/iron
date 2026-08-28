@@ -32,6 +32,7 @@ from iron.common.stream.design import (
     group_text,
     region_module,
     stream_revision,
+    trace_group,
     trace_size,
     trace_tiles,
 )
@@ -329,6 +330,7 @@ def _run_codegen(seq_len, embedding_dim, hidden_dim, npu, k):
         enable_codegen=True,
         trace_size=trace_size(),
         trace_max_tiles=trace_tiles(),
+        trace_group=trace_group(),
         nb_cols_to_use=grid.num_columns,
         npu=npu,
         backend=BACKEND,

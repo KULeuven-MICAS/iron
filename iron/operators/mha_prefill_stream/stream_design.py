@@ -31,6 +31,7 @@ from iron.common.stream.design import (
     group_text,
     region_module,
     stream_revision,
+    trace_group,
     trace_size,
     trace_tile_list,
     trace_tiles,
@@ -599,6 +600,7 @@ def _run_codegen(seq_len, d_head, npu, k, causal, flash, cfg=None):
         enable_codegen=True,
         trace_size=trace_size(),
         trace_max_tiles=trace_tiles(),
+        trace_group=trace_group(),
         trace_tiles=trace_tile_list(),
         # One head occupies one column, so a wider search only enlarges the
         # memory-tile path enumeration the solver has to walk.

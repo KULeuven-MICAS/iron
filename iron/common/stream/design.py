@@ -22,6 +22,7 @@ __all__ = [
     "design_paths",
     "group_text",
     "digest",
+    "trace_group",
     "trace_size",
     "trace_tiles",
 ]
@@ -126,6 +127,16 @@ def trace_size() -> int:
 def trace_tiles() -> int:
     """How many tiles to trace. Routing, not the packet id space, is the real limit."""
     return int(os.environ.get("IRON_TRACE_NTILES", "4"))
+
+
+def trace_group() -> int | None:
+    """Which fusion group to trace, from the operator named in ``IRON_TRACE_OP``.
+
+    The host wires one trace buffer, against the operator whose slot it took, so codegen
+    instruments that group alone. Unset traces the only group a single-group design has.
+    """
+    match = re.match(r"op(\d+)_", os.environ.get("IRON_TRACE_OP", ""))
+    return int(match.group(1)) if match else None
 
 
 def trace_tile_list() -> tuple[tuple[int, int], ...]:
