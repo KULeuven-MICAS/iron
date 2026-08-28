@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import hashlib
+import os
 import logging
 import time
 from pathlib import Path
@@ -575,7 +576,12 @@ class SequenceFullELFCallable(SequenceCallable):
                 for i, (o, *_) in enumerate(self.op.runlist)
             },
             self.op.trace_size,
+            os.environ.get("IRON_TRACE_OP") or None,
         )
+        # Only the named operator got a trace argument, so only it has a buffer to hand back.
+        self.trace_buffers = {
+            n: b for n, b in self.trace_buffers.items() if n in trace_slots
+        }
         for idx, buf in zip(
             consolidated_idx,
             (self.input_buffer, self.output_buffer, self.scratch_buffer),
