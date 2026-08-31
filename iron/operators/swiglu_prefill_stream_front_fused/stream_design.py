@@ -251,6 +251,10 @@ def _experiment_id(seq_len, embedding_dim, hidden_dim):
     trace_suffix = ""
     if trace_size():
         trace_suffix = f"-traced_{trace_size()}_{trace_tiles()}"
+        if trace_core_pc():
+            trace_suffix += "-pc"
+        elif trace_core_lock_requests():
+            trace_suffix += "-locks"
     return (
         f"{hardware}-swiglu_fused_front{trace_suffix}_{seq_len}_{embedding_dim}_{hidden_dim}"
         f"-{grid.num_rows}_row_{grid.num_columns}_col"
@@ -273,6 +277,79 @@ def trace_memtiles():
 def trace_shimtiles():
     """Number of shim tiles to trace; set IRON_TRACE_NSHIMTILES=0 to disable."""
     return int(os.environ.get("IRON_TRACE_NSHIMTILES", "1"))
+
+
+def trace_core_pc():
+    """Trace selected core events with their program counter."""
+    return os.environ.get("IRON_TRACE_CORE_PC", "0").lower() not in {
+        "",
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+
+def trace_core_lock_requests():
+    """Trace lock requests alongside event-time stall events."""
+    return os.environ.get("IRON_TRACE_CORE_LOCKS", "0").lower() not in {
+        "",
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+
+def _detailed_core_trace(mlir_text: str) -> str:
+    """Add instruction-level lock events to the selected core trace mode."""
+    if not (trace_core_pc() or trace_core_lock_requests()):
+        return mlir_text
+
+    if trace_core_pc():
+        mlir_text = re.sub(
+            r'("aie\.trace\.mode"\(\)\s*<\{mode\s*=\s*)0(\s*:\s*i32\s*\}>)',
+            r"\g<1>1\g<2>",
+            mlir_text,
+        )
+
+    def rewrite_core_trace(match):
+        block = match.group(0)
+        if trace_core_pc():
+            for old, new in (
+                ("MEMORY_STALL", "INSTR_STREAM_GET"),
+                ("LOCK_STALL", "INSTR_STREAM_PUT"),
+                ("INSTR_VECTOR", "NONE"),
+            ):
+                block = block.replace(
+                    f'#aie.trace_event<"{old}">', f'#aie.trace_event<"{new}">'
+                )
+        none_index = 0
+
+        def replace_none(none_match):
+            nonlocal none_index
+            if trace_core_pc():
+                replacement = (
+                    "INSTR_LOCK_ACQUIRE_REQ"
+                    if none_index == 0
+                    else "INSTR_LOCK_RELEASE_REQ" if none_index == 1 else "NONE"
+                )
+            else:
+                replacement = (
+                    "INSTR_LOCK_ACQUIRE_REQ" if none_index == 0 else "NONE"
+                )
+            none_index += 1
+            return f'#aie.trace_event<"{replacement}">'
+
+        return re.sub(r'#aie\.trace_event<"NONE">', replace_none, block)
+
+    mlir_text = re.sub(
+        r'"aie\.trace"\(.*?\n\s+\}\) : \(index\) -> \(\)',
+        rewrite_core_trace,
+        mlir_text,
+        flags=re.DOTALL,
+    )
+    return mlir_text
 
 
 def _design_paths(seq_len, embedding_dim, hidden_dim):
@@ -477,4 +554,4 @@ def load_group(
         hidden_dim=hidden_dim,
         npu=npu,
     )
-    return region_module(text, func_prefix)
+    return region_module(_detailed_core_trace(text), func_prefix)
