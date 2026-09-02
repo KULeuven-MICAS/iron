@@ -120,7 +120,7 @@ def gemm_tiles():
     }
 
 
-COLUMNS_PER_LAYER = 2
+COLUMNS_PER_LAYER = 4
 
 
 @lru_cache(maxsize=None)
@@ -143,7 +143,11 @@ def _placements(embedding_dim):
             zip("mkn", tiles), utilization=61.8, layout="default", bfp16_mmul=True
         )
 
-    columns = dict(zip([NAME_FRONT, NAME_DOWN], grid.allocate([COLUMNS_PER_LAYER] * 2)))
+    every_other = tuple(range(0, 2 * COLUMNS_PER_LAYER, 2))
+    columns = {
+        NAME_FRONT: every_other,
+        NAME_DOWN: tuple(c + 1 for c in every_other),
+    }
     cores = grid.num_rows * COLUMNS_PER_LAYER
     return {
         NAME_FRONT: Placement(
