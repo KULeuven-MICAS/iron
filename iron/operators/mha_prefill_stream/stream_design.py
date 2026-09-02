@@ -17,7 +17,7 @@ one per process. ``IRON_FUSED_COLUMNS``, ``IRON_FUSED_ROWS``, ``IRON_FUSED_KERNE
 """
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path
 
@@ -170,6 +170,19 @@ def group_layers(k, cfg: DesignConfig | None = None) -> list:
         1: [[*score_layers(cfg), CONTEXT_NODE]],
         LAYER_BY_LAYER: [[SCORES_NODE], [SOFTMAX_NODE], [CONTEXT_NODE]],
     }[k]
+
+
+def _default_columns(seq_len: int, cfg: DesignConfig) -> int:
+    """The widest column count the query still splits over in whole blocks.
+
+    Fixing it at the narrowest one every supported sequence divides by leaves most of
+    the array idle: measured, eight columns beat four by 1.08x at 512 and 1.87x at 4096.
+    """
+    grid = array()
+    for columns in range(grid.num_columns, 0, -1):
+        if not seq_len % (cfg.flash_query * columns):
+            return columns
+    return cfg.fused_columns
 
 
 def _default_rows(seq_len: int, flash: bool, cfg: DesignConfig) -> str:
@@ -586,6 +599,8 @@ def _experiment_id(seq_len, d_head, k, causal, flash, cfg=None):
 def _run_codegen(seq_len, d_head, npu, k, causal, flash, cfg=None):
     """Run stream-dse's constraint optimization and code generation once."""
     cfg = cfg or DesignConfig.from_environment()
+    if flash and k == 1 and not os.environ.get("IRON_FUSED_COLUMNS"):
+        cfg = replace(cfg, fused_columns=_default_columns(seq_len, cfg))
     experiment_id = _experiment_id(seq_len, d_head, k, causal, flash, cfg)
     workload_path, mapping_path = build_inputs(
         seq_len,
