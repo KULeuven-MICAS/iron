@@ -395,7 +395,9 @@ void partial_softmax(bfloat16 *A,
                      int32_t S_q_eff,
                      int32_t S_kv_eff)
 {
+    event0();
     partial_softmax_body(A, P, scale_buffer, idx_buffer, inv_scale, B_q, B_kv, S_q_eff, S_kv_eff, 0);
+    event1();
 }
 
 // The same step, told which of its sides are MAC tiled. A handover straight to the core
@@ -411,8 +413,10 @@ void partial_softmax_mode(bfloat16 *A,
                           int32_t S_kv_eff,
                           int32_t tiled)
 {
+    event0();
     partial_softmax_body(A, P, scale_buffer, idx_buffer, inv_scale, B_q, B_kv, S_q_eff, S_kv_eff,
                          tiled);
+    event1();
 }
 
 // One online-softmax step whole: the score GEMM straight into the probability block, and
