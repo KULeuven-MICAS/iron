@@ -6,19 +6,13 @@ from typing import Any
 
 import aie.utils as aie_utils
 
-from iron.common import (
-    MLIROperator,
-    AIERuntimeArgSpec,
-    PythonGeneratedMLIRArtifact,
-    DesignGenerator,
-)
-from iron.common.device_utils import get_kernel_dir
 from iron.common.sequence import OperatorSequence
+from iron.common.stream.group import StreamGroup
 from iron.common.stream.ops import ELTWISE_MUL, GEMM, SILU
 
 
 @dataclass
-class _SwiGLUStreamGroup(MLIROperator):
+class _SwiGLUStreamGroup(StreamGroup):
     """One stream-dse design, used as an ``OperatorSequence`` child.
 
     ``k`` is how many fused groups the block is split into and ``group_index``
@@ -35,7 +29,7 @@ class _SwiGLUStreamGroup(MLIROperator):
     context: Any = field(default=None, repr=False, compare=False)
 
     def __post_init__(self):
-        MLIROperator.__init__(self, context=self.context)
+        StreamGroup.__init__(self, context=self.context)
 
     @property
     def _design(self):
@@ -43,68 +37,35 @@ class _SwiGLUStreamGroup(MLIROperator):
 
         return stream_design
 
-    def get_mlir_artifact(self):
-        return PythonGeneratedMLIRArtifact(
-            f"{self.name}_{self.design_key()[:12]}.mlir",
-            DesignGenerator(
-                self.operator_dir / "stream_design.py",
-                "load_group",
-                (self.group_index,),
-                {
-                    "k": self.k,
-                    "seq_len": self.seq_len,
-                    "embedding_dim": self.embedding_dim,
-                    "hidden_dim": self.hidden_dim,
-                    "npu": aie_utils.get_current_device().resolve().name,
-                },
-            ),
-        )
+    def _dims(self):
+        return {
+            "k": self.k,
+            "seq_len": self.seq_len,
+            "embedding_dim": self.embedding_dim,
+            "hidden_dim": self.hidden_dim,
+            "npu": aie_utils.get_current_device().resolve().name,
+        }
 
-    def get_kernel_artifacts(self):
-        # The registry is the single place a kernel's source, compile flags and
-        # symbol names are declared, so the object and the design agree.
+    def _per_layer(self):
         design = self._design
         gemm_tiles = design.gemm_tiles(self.k)
-        per_layer = {
+        return {
             design.GATE: (GEMM, gemm_tiles[design.GATE]),
             design.UP: (GEMM, gemm_tiles[design.UP]),
             design.DOWN: (GEMM, gemm_tiles[design.DOWN]),
             design.SILU: (SILU, None),
             design.MUL: (ELTWISE_MUL, None),
         }
-        layers = design.GROUP_LAYERS[self.k][self.group_index]
-        base_dir, kernel_dir = self.context.base_dir, get_kernel_dir()
-        return [
-            artifact
-            for kernel, tiles in dict.fromkeys(per_layer[layer] for layer in layers)
-            for artifact in kernel.kernel_artifacts(
-                base_dir, kernel_dir, **(dict(zip("mkn", tiles)) if tiles else {})
-            )
-        ]
 
-    def design_key(self):
-        """Groups whose generated design is byte-identical share it."""
-        return self._design.group_digest(
-            self.group_index,
-            k=self.k,
-            seq_len=self.seq_len,
-            embedding_dim=self.embedding_dim,
-            hidden_dim=self.hidden_dim,
-            npu=aie_utils.get_current_device().resolve().name,
-        )
+    def _layers(self):
+        return self._design.GROUP_LAYERS[self.k][self.group_index]
 
-    def get_arg_spec(self):
-        """The group's runtime arguments, shaped by the exported graph.
-
-        Both the names and their order come from the workload, which is also the
-        order the generated design takes its arguments in.
-        """
+    def _ports(self):
         dims = (self.seq_len, self.embedding_dim, self.hidden_dim)
-        shapes = self._design.workload_for(*dims).shapes
-        inputs, outputs = self._design.group_ports(*dims, k=self.k)[self.group_index]
-        return [AIERuntimeArgSpec("in", shapes[name]) for name in inputs] + [
-            AIERuntimeArgSpec("out", shapes[name]) for name in outputs
-        ]
+        return (
+            self._design.workload_for(*dims).shapes,
+            self._design.group_ports(*dims, k=self.k)[self.group_index],
+        )
 
 
 def _wiring(seq_len, embedding_dim, hidden_dim, k):

@@ -7,21 +7,15 @@ from typing import Any
 import aie.utils as aie_utils
 import torch
 
-from iron.common import (
-    AIERuntimeArgSpec,
-    DesignGenerator,
-    MLIROperator,
-    PythonGeneratedMLIRArtifact,
-)
-from iron.common.device_utils import get_kernel_dir
 from iron.common.sequence import OperatorSequence
+from iron.common.stream.group import StreamGroup
 from iron.common.stream.ops import FLASH, FUSED_SCORE_SOFTMAX, GEMM, SOFTMAX
 
 BYTES_PER_ELEMENT = 2  # every buffer in a fused sequence is addressed as bfloat16
 
 
 @dataclass
-class _MHAStreamGroup(MLIROperator):
+class _MHAStreamGroup(StreamGroup):
     """One stream-dse design, used as an ``OperatorSequence`` child.
 
     ``k`` is how many fused groups the attention core is split into and
@@ -44,7 +38,7 @@ class _MHAStreamGroup(MLIROperator):
 
     def __post_init__(self):
         self.cfg = self.cfg or self._design.DesignConfig.from_environment()
-        MLIROperator.__init__(self, context=self.context)
+        StreamGroup.__init__(self, context=self.context)
 
     @property
     def _design(self):
@@ -63,25 +57,14 @@ class _MHAStreamGroup(MLIROperator):
             "cfg": self.cfg,
         }
 
-    def get_mlir_artifact(self):
-        return PythonGeneratedMLIRArtifact(
-            f"{self.name}_{self.design_key()[:12]}.mlir",
-            DesignGenerator(
-                self.operator_dir / "stream_design.py",
-                "load_group",
-                (self.group_index,),
-                self._dims(),
-            ),
-        )
-
-    def get_kernel_artifacts(self):
+    def _per_layer(self):
         design = self._design
         tiles = design.kernel_tiles(
             self.seq_len, self.d_head, self.k, self.flash, self.cfg
         )
         # Both halves of an online-softmax step are entry points of the same object.
         score_layer = design.score_layers(self.cfg)[0]
-        per_layer = {
+        return {
             # Fused, the score side is one node against mha.o rather than a GEMM of its
             # own, and its tile shape is the object's compiled block.
             score_layer: (
@@ -94,15 +77,9 @@ class _MHAStreamGroup(MLIROperator):
             ),
             design.SOFTMAX_NODE: (FLASH if self.flash else SOFTMAX, None),
         }
-        layers = design.group_layers(self.k, self.cfg)[self.group_index]
-        base_dir, kernel_dir = self.context.base_dir, get_kernel_dir()
-        return [
-            artifact
-            for kernel, tile in dict.fromkeys(per_layer[layer] for layer in layers)
-            for artifact in kernel.kernel_artifacts(
-                base_dir, kernel_dir, **(dict(zip("mkn", tile)) if tile else {})
-            )
-        ]
+
+    def _layers(self):
+        return self._design.group_layers(self.k, self.cfg)[self.group_index]
 
     def reference(self, *inputs):
         """CPU result for this group, for the reference and compare dispatches.
@@ -125,22 +102,17 @@ class _MHAStreamGroup(MLIROperator):
                 value = value @ next(operands)
         return value
 
-    def design_key(self):
-        """Groups whose generated design is byte-identical share it."""
-        return self._design.group_digest(self.group_index, **self._dims())
-
-    def get_arg_spec(self):
-        """The group's runtime arguments, shaped by the exported graph."""
+    def _ports(self):
         fused = self.flash and self.cfg.fused_kernel
         shapes = self._design.workload_for(
             self.seq_len, self.d_head, fused, fused
         ).shapes
-        inputs, outputs = self._design.group_ports(
-            self.seq_len, self.d_head, self.k, fused, self.cfg
-        )[self.group_index]
-        return [AIERuntimeArgSpec("in", shapes[name]) for name in inputs] + [
-            AIERuntimeArgSpec("out", shapes[name]) for name in outputs
-        ]
+        return (
+            shapes,
+            self._design.group_ports(
+                self.seq_len, self.d_head, self.k, fused, self.cfg
+            )[self.group_index],
+        )
 
 
 class MHAPrefillStream(OperatorSequence):
