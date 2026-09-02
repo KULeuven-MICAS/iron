@@ -154,10 +154,8 @@ class SwiGLUPrefillStream(OperatorSequence):
         context=None,
         share_designs=True,
     ):
-        from iron.operators.swiglu_prefill_stream.stream_design import (
-            default_groups,
-            trace_size,
-        )
+        from iron.common.stream.design import trace_size
+        from iron.operators.swiglu_prefill_stream.stream_design import default_groups
 
         k = default_groups(hidden_dim) if k is None else k
 

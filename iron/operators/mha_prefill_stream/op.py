@@ -176,11 +176,11 @@ class MHAPrefillStream(OperatorSequence):
         dispatch="auto",
         design_config=None,
     ):
+        from iron.common.stream.design import trace_size
         from iron.operators.mha_prefill_stream.stream_design import (
             DesignConfig,
             LAYER_BY_LAYER,
             group_ports,
-            trace_size,
         )
 
         cfg = design_config or DesignConfig.from_environment()
