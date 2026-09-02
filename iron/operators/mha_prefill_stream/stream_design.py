@@ -114,8 +114,10 @@ SOFTMAX_CORES = (0, 1, 2, 3)
 
 # Three layers on a row each leave the array's fourth idle. The softmax costs several
 # times what the stages either side of it do, measured, so it is the layer given two of
-# the rows, once there are query blocks enough to fill them.
+# the rows. The fourth core only pays for its wider fan-out once the sequence is long
+# enough: measured, equal width wins by 6.7% at 2048 and loses by 1.2% at 32768.
 _WIDE_SOFTMAX_ROWS = "0|13|2"
+_WIDE_SOFTMAX_SEQ = 8192
 
 
 @dataclass(frozen=True)
@@ -176,7 +178,11 @@ def _default_rows(seq_len: int, flash: bool, cfg: DesignConfig) -> str:
         # tiles already share, so each core needs its partner directly above or below it
         # and no other: 1 and 2 against 0 and 3 is the one split where that holds.
         return "12|03"
-    if flash and not seq_len % (cfg.flash_query * cfg.fused_columns * 2):
+    if (
+        flash
+        and seq_len >= _WIDE_SOFTMAX_SEQ
+        and not seq_len % (cfg.flash_query * cfg.fused_columns * 2)
+    ):
         return _WIDE_SOFTMAX_ROWS
     return "0|1|2"
 
