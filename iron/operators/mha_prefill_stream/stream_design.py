@@ -23,18 +23,11 @@ from pathlib import Path
 
 import torch
 
-from stream.api import optimize_allocation_co
-
 from iron.common.stream.design import (
     design_paths,
     digest,
     group_text,
     region_module,
-    stream_revision,
-    trace_group,
-    trace_size,
-    trace_tile_list,
-    trace_tiles,
 )
 from iron.common.stream.hardware import array
 from iron.common.stream.mapping import (
@@ -43,6 +36,7 @@ from iron.common.stream.mapping import (
     emit_mapping,
     group_boundaries,
 )
+from iron.common.stream.runner import design_dir, experiment_id, run_codegen
 from iron.common.stream.workload import export_workload
 from iron.operators.mha_prefill_stream.reference import (
     CONTEXT_NODE,
@@ -55,18 +49,6 @@ from iron.operators.mha_prefill_stream.reference import (
     SOFTMAX_NODE,
     attention_core_module,
 )
-
-ACCELERATOR = os.path.join(
-    os.path.dirname(__import__("stream").__file__),
-    "inputs",
-    "aie",
-    "hardware",
-    "whole_array_strix.yaml",
-)
-BACKEND = os.environ.get(
-    "STREAM_BACKEND", "ortools_gscip"
-)  # license-free OR-Tools GSCIP by default
-OUTPUT_ROOT = "outputs"
 
 # Columns a GEMM layer spans, splitting its output dimension over them on top of the
 # query dimension over a column's rows. Kept at one: a distribute or a join costs one
@@ -83,9 +65,6 @@ def _context_columns(d_head):
 
 
 SOFTMAX_COLUMN = 0
-# Memory tiles the solver may route through. The fused design spreads its shim traffic
-# over every column, which is what keeps eight heads inside a shim's buffer descriptors.
-COLUMNS_IN_USE = 8
 
 # Key positions the score GEMM produces at a time. The softmax reduces the key
 # dimension and reads whole rows; a GEMM in a group of its own may block it, but one
@@ -569,8 +548,6 @@ def build_inputs(
 
 def _experiment_id(seq_len, d_head, k, causal, flash, cfg=None):
     cfg = _resolved(cfg or DesignConfig.from_environment(), seq_len, k, flash)
-    grid = array()
-    hardware = os.path.splitext(os.path.basename(ACCELERATOR))[0]
     suffix = f"_k{k}" if k != LAYER_BY_LAYER else ""
     # The fused designs split the query over the config's columns and nothing else in
     # the id records it, so without this a sweep over it is served the first design.
@@ -590,58 +567,22 @@ def _experiment_id(seq_len, d_head, k, causal, flash, cfg=None):
         suffix += "_flash"
     elif causal:
         suffix += "_causal"
-    if trace_size():
-        # The buffer size is compiled into the runtime sequence, so a design
-        # generated for one size cannot serve another.
-        suffix += f"_traced{trace_size()}"
-        # Which tiles are traced changes the design, so it belongs in the id.
-        for col, row in trace_tile_list():
-            suffix += f"_{col}x{row}"
-    return (
-        f"{hardware}-mha{suffix}_{seq_len}_{d_head}"
-        f"-{grid.num_rows}_row_{grid.num_columns}_col-{stream_revision()}"
-    )
+    return experiment_id("mha", f"{seq_len}_{d_head}", suffix)
 
 
 def _run_codegen(seq_len, d_head, npu, k, causal, flash, cfg=None):
     """Run stream-dse's constraint optimization and code generation once."""
-    cfg = cfg or DesignConfig.from_environment()
-    experiment_id = _experiment_id(seq_len, d_head, k, causal, flash, cfg)
+    eid = _experiment_id(seq_len, d_head, k, causal, flash, cfg)
     workload_path, mapping_path = build_inputs(
-        seq_len,
-        d_head,
-        os.path.join(OUTPUT_ROOT, experiment_id),
-        k=k,
-        causal=causal,
-        flash=flash,
-        cfg=cfg,
+        seq_len, d_head, design_dir(eid), k=k, causal=causal, flash=flash, cfg=cfg
     )
-    optimize_allocation_co(
-        hardware=ACCELERATOR,
-        workload=workload_path,
-        mapping=mapping_path,
-        experiment_id=experiment_id,
-        output_path=OUTPUT_ROOT,
-        skip_if_exists=False,
-        enable_codegen=True,
-        trace_size=trace_size(),
-        trace_max_tiles=trace_tiles(),
-        trace_group=trace_group(),
-        trace_tiles=trace_tile_list(),
-        # One head occupies one column, so a wider search only enlarges the
-        # memory-tile path enumeration the solver has to walk.
-        nb_cols_to_use=COLUMNS_IN_USE,
-        npu=npu,
-        backend=BACKEND,
-    )
+    run_codegen(eid, workload_path, mapping_path, npu)
 
 
 def _design_paths(seq_len, d_head, k, causal=False, flash=False, cfg=None):
     cfg = cfg or DesignConfig.from_environment()
     return design_paths(
-        os.path.join(
-            OUTPUT_ROOT, _experiment_id(seq_len, d_head, k, causal, flash, cfg)
-        ),
+        design_dir(_experiment_id(seq_len, d_head, k, causal, flash, cfg)),
         len(group_layers(k, cfg)),
     )
 

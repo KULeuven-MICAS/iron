@@ -22,21 +22,16 @@ import os
 from functools import lru_cache
 from pathlib import Path
 
-import stream
 import torch
-from stream.api import optimize_allocation_co
 
 from iron.common.stream.design import (
     design_paths,
     digest,
     group_text,
     region_module,
-    stream_revision,
-    trace_group,
-    trace_size,
-    trace_tiles,
 )
 from iron.common.stream.hardware import array
+from iron.common.stream.runner import design_dir, experiment_id, run_codegen
 from iron.common.stream.mapping import (
     FusedGroup,
     Placement,
@@ -46,19 +41,6 @@ from iron.common.stream.mapping import (
 from iron.common.stream.workload import export_workload
 from iron.operators.swiglu_prefill_stream import reference
 from iron.operators.swiglu_prefill_stream.reference import swiglu_module
-
-# Hardware description for the whole-array Strix (npu2) target, shipped as package
-# data inside the installed stream package.
-ACCELERATOR = os.path.join(
-    os.path.dirname(stream.__file__),
-    "inputs",
-    "aie",
-    "hardware",
-    "whole_array_strix.yaml",
-)
-
-BACKEND = "ortools_gscip"  # license-free OR-Tools GSCIP, no Gurobi needed
-OUTPUT_ROOT = "outputs"
 
 # Names for the exported graph's computation nodes, in topological order, and for
 # the tensors they produce. They name the roles rather than the ATen ops the
@@ -300,52 +282,22 @@ def build_inputs(seq_len, embedding_dim, hidden_dim, output_dir, k=1):
 
 
 def _experiment_id(seq_len, embedding_dim, hidden_dim, k):
-    grid = array()
-    hardware = os.path.splitext(os.path.basename(ACCELERATOR))[0]
     suffix = f"_k{k}" if k > 1 else ""
-    if trace_size():
-        # The buffer size is compiled into the runtime sequence, so a design
-        # generated for one size cannot serve another.
-        suffix += f"_traced{trace_size()}"
-    return (
-        f"{hardware}-swiglu{suffix}_{seq_len}_{embedding_dim}_{hidden_dim}"
-        f"-{grid.num_rows}_row_{grid.num_columns}_col-{stream_revision()}"
-    )
+    return experiment_id("swiglu", f"{seq_len}_{embedding_dim}_{hidden_dim}", suffix)
 
 
 def _run_codegen(seq_len, embedding_dim, hidden_dim, npu, k):
     """Run stream-dse's constraint optimization and code generation once."""
-    grid = array()
-    experiment_id = _experiment_id(seq_len, embedding_dim, hidden_dim, k)
+    eid = _experiment_id(seq_len, embedding_dim, hidden_dim, k)
     workload_path, mapping_path = build_inputs(
-        seq_len,
-        embedding_dim,
-        hidden_dim,
-        os.path.join(OUTPUT_ROOT, experiment_id),
-        k=k,
+        seq_len, embedding_dim, hidden_dim, design_dir(eid), k=k
     )
-    optimize_allocation_co(
-        hardware=ACCELERATOR,
-        workload=workload_path,
-        mapping=mapping_path,
-        experiment_id=experiment_id,
-        output_path=OUTPUT_ROOT,
-        skip_if_exists=False,
-        enable_codegen=True,
-        trace_size=trace_size(),
-        trace_max_tiles=trace_tiles(),
-        trace_group=trace_group(),
-        nb_cols_to_use=grid.num_columns,
-        npu=npu,
-        backend=BACKEND,
-    )
+    run_codegen(eid, workload_path, mapping_path, npu)
 
 
 def _design_paths(seq_len, embedding_dim, hidden_dim, k):
     return design_paths(
-        os.path.join(
-            OUTPUT_ROOT, _experiment_id(seq_len, embedding_dim, hidden_dim, k)
-        ),
+        design_dir(_experiment_id(seq_len, embedding_dim, hidden_dim, k)),
         len(GROUP_LAYERS[k]),
     )
 
