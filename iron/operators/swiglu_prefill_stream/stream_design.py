@@ -127,12 +127,15 @@ def _row_width(hidden_dim):
 def default_groups(hidden_dim):
     """How many fused groups to build when the caller does not say.
 
-    Fusing gives each layer a share of the array, which pays while the block is small
-    enough that the round trips it saves outweigh the cores it gives up. Once a row no
-    longer fits a core the block is past that point, and the layers are better off taking
-    the whole array in turn.
+    Layer by layer, always. Fusing is meant to pay for the round trips it saves with the
+    cores it gives up, but it never has: measured at embedding 512 and hidden 2048 against
+    iron/operators/swiglu_prefill, one group ties layer-by-layer at sequence 256 (1.29 ms
+    both) and loses badly once the sequence grows -- 3.96 ms against 2.44 at 1024, and 7.49
+    against 3.92 at 2048, where layer-by-layer is the only one of the two that beats the
+    hand-written operator. Fusing costs each GEMM three quarters of its columns, and the
+    weight traffic that follows outgrows the intermediates it keeps on chip.
     """
-    return LAYER_BY_LAYER if _row_width(hidden_dim) < hidden_dim else 1
+    return LAYER_BY_LAYER
 
 
 def _placements(k, hidden_dim):
