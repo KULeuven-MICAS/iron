@@ -119,6 +119,7 @@ def fused_mha(
     emulate_bf16_mmul_with_bfp16: bool,
     trace_size: int = 0,
     verbose: bool = False,
+    func_prefix: str = "",
 ):
 
     of_depth = 2
@@ -213,17 +214,22 @@ def fused_mha(
 
     # AIE kernel declarations
     func_type = "" if vectorized else "_scalar"
-    zero_kernel = Kernel(f"zero_{dtype_str}", "mha.o", [qk_ty])
+    # A fused sequence gives each runlist entry its own symbol namespace, the way
+    # gemv/design.py does, so the same object can appear in several designs at once.
+    def named(symbol: str) -> str:
+        return f"{func_prefix}{symbol}"
+
+    zero_kernel = Kernel(named(f"zero_{dtype_str}"), named("mha.o"), [qk_ty])
 
     memcopy_kernel_scale = Kernel(
-        f"passThroughLine", "mha_passThrough.o", [s_ty, s_ty, np.int32]
+        named("passThroughLine"), named("mha_passThrough.o"), [s_ty, s_ty, np.int32]
     )
 
-    scale_buffer_init_kernel = Kernel("init_scale_buffer", "mha.o", [s_ty, np.int32])
+    scale_buffer_init_kernel = Kernel(named("init_scale_buffer"), named("mha.o"), [s_ty, np.int32])
 
     partial_softmax_kernel = Kernel(
-        "partial_softmax",
-        "mha.o",
+        named("partial_softmax"),
+        named("mha.o"),
         [
             qk_ty,
             qk_ty,
@@ -238,14 +244,14 @@ def fused_mha(
     )
 
     matmul_QK = Kernel(
-        f"matmul_bf16_bf16_wrapper{func_type}",
-        "mha.o",
+        named(f"matmul_bf16_bf16_wrapper{func_type}"),
+        named("mha.o"),
         [q_ty, k_ty, qk_ty, np.ndarray[(2,), np.dtype[np.int32]]],
     )
 
     matmul_PV = Kernel(
-        "matmul_PV",
-        "mha.o",
+        named("matmul_PV"),
+        named("mha.o"),
         [
             qk_ty,
             k_ty,
@@ -258,8 +264,8 @@ def fused_mha(
     )
 
     rescale_O = Kernel(
-        "rescale_O",
-        "mha.o",
+        named("rescale_O"),
+        named("mha.o"),
         [qk_ty, s_ty, np.int32, np.ndarray[(2,), np.dtype[np.int32]]],
     )
 
