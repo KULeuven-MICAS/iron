@@ -296,22 +296,19 @@ static void partial_softmax_body(bfloat16 *A,
             }
         }
 
-        // Diagonal small causal mask only within valid region (vectorized)
+        // Diagonal small causal mask, as a lane select. A row is one vector wide, so the
+        // vector store this used to try could never fire -- its tail began at i + 1 and
+        // needed VECTOR_LENGTH more columns -- and the whole triangle went out one
+        // element at a time, 2016 scalar stores for a 64x64 block.
         if (kv_block_idx == q_block_idx) {
-            using Vec64bf16 = aie::vector<bfloat16, VECTOR_LENGTH>;
-            Vec64bf16 lowest_vec = aie::broadcast<bfloat16, VECTOR_LENGTH>(std::numeric_limits<bfloat16>::lowest());
+            const bfloat16 lowest = std::numeric_limits<bfloat16>::lowest();
             for (int32_t i = 0; i < valid_q_rows; i++) {
-                int32_t j = i + 1;
-                if (j < valid_kv_cols) {
-                    // Vectorized stores for upper triangle within valid_kv_cols
-                    for (; j + VECTOR_LENGTH <= valid_kv_cols; j += VECTOR_LENGTH) {
-                        aie::store_v(A + i * B_kv + j, lowest_vec);
-                    }
-                    // Remainder
-                    for (; j < valid_kv_cols; ++j) {
-                        A[i * B_kv + j] = std::numeric_limits<bfloat16>::lowest();
-                    }
-                }
+                const uint64_t upper = i + 1 >= VECTOR_LENGTH ? 0 : ~((1ULL << (i + 1)) - 1);
+                bfloat16 *row = A + i * B_kv;
+                aie::store_v(row,
+                             aie::select(aie::load_v<VECTOR_LENGTH>(row),
+                                         lowest,
+                                         aie::mask<VECTOR_LENGTH>::from_uint64(upper)));
             }
         }
     }
