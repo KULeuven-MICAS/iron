@@ -17,6 +17,7 @@ from iron.common import (
     PythonGeneratedMLIRArtifact,
     DesignGenerator,
 )
+from iron.operators._trace import resolve_trace_size
 import aie.utils as aie_utils
 
 
@@ -117,12 +118,17 @@ class MHA(MLIROperator):
     def get_arg_spec(self):
         seq_padding = self._calculate_seq_padding(self.seq_len, self.num_of_pipelines)
         buffer_size = self.num_heads * self.d * seq_padding
-        return [
+        spec = [
             AIERuntimeArgSpec("in", (buffer_size,)),  # Q
             AIERuntimeArgSpec("in", (buffer_size,)),  # K
             AIERuntimeArgSpec("in", (buffer_size,)),  # V
             AIERuntimeArgSpec("out", (buffer_size,)),  # O
         ]
+        # Tracing appends a buffer to the runtime sequence, so the host binds one too.
+        trace_size = resolve_trace_size()
+        if trace_size:
+            spec.append(AIERuntimeArgSpec("out", (trace_size,), dtype=np.int8))
+        return spec
 
     def _calculate_seq_padding(self, seq_len, num_pipeline=1):
         return ((seq_len + 63 * num_pipeline) // (64 * num_pipeline)) * (
