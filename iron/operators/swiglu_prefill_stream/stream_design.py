@@ -74,10 +74,11 @@ RESULT_NAMES = {
 }
 
 # The kernel tile each layer is compiled and mapped for, as (sequence, embedding,
-# hidden). A core holds the operands of every layer in its group, so the tile a group
-# can afford shrinks as more layers fuse onto it. Carrying the tile and no absolute
-# dimension is what lets one mapping hold across problem sizes.
-FUSED_TILES = (32, 32, 64)  # k=1, k=2: several layers share a core
+# hidden). A fused group spreads its layers over disjoint columns, so what bounds the
+# tile is the elementwise cores, which hold three operands at once: at 64x64x64 the
+# multiply core needs 80 KB of its 64 KB. Carrying the tile and no absolute dimension
+# is what lets one mapping hold across problem sizes.
+FUSED_TILES = (32, 32, 64)  # k=1, k=2: bounded by the elementwise cores
 LAYER_TILES = (64, 64, 64)  # k=5: one layer per core
 
 # Sequence positions an elementwise layer works at a time when it reads from and
