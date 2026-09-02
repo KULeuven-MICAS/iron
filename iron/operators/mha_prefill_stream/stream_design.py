@@ -185,6 +185,13 @@ def _default_columns(seq_len: int, cfg: DesignConfig) -> int:
     return cfg.fused_columns
 
 
+def _resolved(cfg: DesignConfig, seq_len: int, k: int, flash: bool) -> DesignConfig:
+    """The config a design is built with, once the sequence has had its say."""
+    if not (flash and k == 1) or os.environ.get("IRON_FUSED_COLUMNS"):
+        return cfg
+    return replace(cfg, fused_columns=_default_columns(seq_len, cfg))
+
+
 def _default_rows(seq_len: int, flash: bool, cfg: DesignConfig) -> str:
     if cfg.fused_kernel:
         # The running scale crosses between a step's two halves through the memory the
@@ -544,7 +551,7 @@ def build_inputs(
     seq_len, d_head, output_dir, k=LAYER_BY_LAYER, causal=False, flash=False, cfg=None
 ):
     """Write the workload and mapping for one configuration; return their paths."""
-    cfg = cfg or DesignConfig.from_environment()
+    cfg = _resolved(cfg or DesignConfig.from_environment(), seq_len, k, flash)
     _check_shapes(seq_len, d_head, k, flash, cfg)
     workload = workload_for(seq_len, d_head, flash, flash and cfg.fused_kernel)
     output_dir = Path(output_dir)
@@ -561,7 +568,7 @@ def build_inputs(
 
 
 def _experiment_id(seq_len, d_head, k, causal, flash, cfg=None):
-    cfg = cfg or DesignConfig.from_environment()
+    cfg = _resolved(cfg or DesignConfig.from_environment(), seq_len, k, flash)
     grid = array()
     hardware = os.path.splitext(os.path.basename(ACCELERATOR))[0]
     suffix = f"_k{k}" if k != LAYER_BY_LAYER else ""
@@ -599,8 +606,6 @@ def _experiment_id(seq_len, d_head, k, causal, flash, cfg=None):
 def _run_codegen(seq_len, d_head, npu, k, causal, flash, cfg=None):
     """Run stream-dse's constraint optimization and code generation once."""
     cfg = cfg or DesignConfig.from_environment()
-    if flash and k == 1 and not os.environ.get("IRON_FUSED_COLUMNS"):
-        cfg = replace(cfg, fused_columns=_default_columns(seq_len, cfg))
     experiment_id = _experiment_id(seq_len, d_head, k, causal, flash, cfg)
     workload_path, mapping_path = build_inputs(
         seq_len,
