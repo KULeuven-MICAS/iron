@@ -6,6 +6,8 @@
 Semantics:
   * explicit ``trace_size`` wins; otherwise fall back to ``IRON_TRACE_SIZE``
   * ``IRON_TRACE_NTILES`` (default 1) caps how many workers get traced; 0 traces none
+  * ``IRON_TRACE_WORKERS`` names them instead, as indices into the design's worker list
+  * ``IRON_TRACE_EGRESS`` picks the shim column the trace leaves by, default column 0
   * no-op when neither is set, so production paths are unaffected
 """
 
@@ -59,9 +61,13 @@ def maybe_enable_trace(prog, trace_size, workers, coretile_events=None):
     # meaningless (a negative slice index would silently drop the LAST worker).
     ntiles = max(0, int(os.environ.get("IRON_TRACE_NTILES", "1")))
 
+    picked = os.environ.get("IRON_TRACE_WORKERS", "").strip()
+    workers = list(workers)
     prog.enable_trace(
         ts,
-        workers=list(workers)[:ntiles],
+        workers=([workers[int(i)] for i in picked.split(",")] if picked
+                 else workers[:ntiles]),
+        egress_shim_col=int(os.environ.get("IRON_TRACE_EGRESS", "0")),
         coretile_events=(
             coretile_events
             if coretile_events is not None
