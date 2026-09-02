@@ -68,13 +68,19 @@ class _SwiGLUStreamGroupFrontFused(MLIROperator):
             design.NAME_FRONT: (SWIGLU_FUSED_FRONT, gemm_tiles[design.NAME_FRONT]),
             design.NAME_DOWN: (GEMM, gemm_tiles[design.NAME_DOWN]),
         }
+        # The front kernel reduces across calls, so its object depends on the whole
+        # contraction and not just its tile of it.
+        extra = {SWIGLU_FUSED_FRONT: {"full_k": self.embedding_dim}}
         layers = design.GROUP_LAYERS[self.group_index]
         base_dir, kernel_dir = self.context.base_dir, get_kernel_dir()
         return [
             artifact
             for kernel, tiles in dict.fromkeys(per_layer[layer] for layer in layers)
             for artifact in kernel.kernel_artifacts(
-                base_dir, kernel_dir, **(dict(zip("mkn", tiles)) if tiles else {})
+                base_dir,
+                kernel_dir,
+                **(dict(zip("mkn", tiles)) if tiles else {}),
+                **extra.get(kernel, {}),
             )
         ]
 

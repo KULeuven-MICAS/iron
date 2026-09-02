@@ -120,6 +120,9 @@ def gemm_tiles():
     }
 
 
+COLUMNS_PER_LAYER = 2
+
+
 @lru_cache(maxsize=None)
 def array() -> ComputeArray:
     """The compute grid of the device being built for."""
@@ -128,19 +131,8 @@ def array() -> ComputeArray:
     return ComputeArray.from_device(aie_utils.get_current_device())
 
 
-def _placements():
-    """Where each layer runs.
-
-    Fused (k=1, k=2): the layers sit on disjoint columns, two per GEMM and one per
-    elementwise layer, so they pipeline across steady-state iterations. Each splits
-    over the array's rows (D0, the sequence dimension) and a GEMM over its two
-    columns as well (D2, the output dimension).
-
-    Layer by layer (k=5): the layers run in turn, so each takes the whole array.
-    The GEMMs use every row; the elementwise layers take one core per column and
-    split the sequence across them, the shape IRON's channeled operators use. They
-    also read whole rows, so their transfers to and from memory are contiguous.
-    """
+def _placements(embedding_dim):
+    """Where each layer runs: disjoint columns, D0 split over every core in them."""
     grid = array()
     sequence_tile, _, hidden_tile = tiles_for()
     tiles = gemm_tiles()
@@ -151,12 +143,17 @@ def _placements():
             zip("mkn", tiles), utilization=61.8, layout="default", bfp16_mmul=True
         )
 
-    # TODO rework/tune this
-    columns = dict(zip([NAME_FRONT, NAME_DOWN], grid.allocate([1, 1])))
+    columns = dict(zip([NAME_FRONT, NAME_DOWN], grid.allocate([COLUMNS_PER_LAYER] * 2)))
+    cores = grid.num_rows * COLUMNS_PER_LAYER
     return {
-        # TODO try adding more D0 unrolling, to make up for the lost hidden/embedding urolling
-        NAME_FRONT: Placement(columns[NAME_FRONT], (("D0", grid.num_rows),), gemm(tiles[NAME_FRONT])),
-        NAME_DOWN: Placement(columns[NAME_DOWN], (("D0", grid.num_rows),), gemm(tiles[NAME_DOWN])),
+        NAME_FRONT: Placement(
+            columns[NAME_FRONT],
+            (("D0", cores),),
+            dict(gemm(tiles[NAME_FRONT]), full_k=embedding_dim),
+        ),
+        NAME_DOWN: Placement(
+            columns[NAME_DOWN], (("D0", cores),), gemm(tiles[NAME_DOWN])
+        ),
     }
 
 
@@ -188,10 +185,11 @@ def _check_shapes(seq_len, embedding_dim, hidden_dim):
     grid = array()
     sequence_tile, embedding_tile, hidden_tile = tiles_for()
     gemm_split = 2
-    if seq_len % grid.num_rows or seq_len < sequence_tile * grid.num_rows:
+    cores = grid.num_rows * COLUMNS_PER_LAYER
+    if seq_len % cores or seq_len < sequence_tile * cores:
         raise ValueError(
-            f"seq_len ({seq_len}) must be a multiple of {grid.num_rows} and at "
-            f"least {sequence_tile * grid.num_rows}"
+            f"seq_len ({seq_len}) must be a multiple of {cores} and at "
+            f"least {sequence_tile * cores}"
         )
     if embedding_dim % (embedding_tile * gemm_split):
         raise ValueError(
@@ -236,7 +234,7 @@ def build_inputs(seq_len, embedding_dim, hidden_dim, output_dir):
         workload.write(output_dir / "workload.onnx"),
         emit_mapping(
             workload,
-            _placements(),
+            _placements(embedding_dim),
             _groups(),
             array(),
             output_dir / "mapping.yaml",
@@ -379,10 +377,20 @@ def _run_codegen(seq_len, embedding_dim, hidden_dim, npu):
         os.path.join(OUTPUT_ROOT, experiment_id),
     )
 
-    def front_fused_kernel(m: int, k: int, n: int, utilization: float, layout: str, bfp16_mmul: bool):
+    def front_fused_kernel(
+        m: int,
+        k: int,
+        n: int,
+        utilization: float,
+        layout: str,
+        bfp16_mmul: bool,
+        full_k: int,
+    ):
         # TODO what is the point of utilization and these other extra params?
         del layout, bfp16_mmul
-        return SwigluFrontFusedKernel(m=m, k=k, n=n, utilization=utilization)
+        return SwigluFrontFusedKernel(
+            m=m, k=k, n=n, full_k=full_k, utilization=utilization
+        )
 
     optimize_allocation_co(
         hardware=ACCELERATOR,

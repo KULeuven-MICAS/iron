@@ -191,10 +191,10 @@ def swiglu_fused_front_layouts(
     )
 
 
-def _swiglu_fused_front_artifacts(base_dir, kernel_dir, m, k, n):
+def _swiglu_fused_front_artifacts(base_dir, kernel_dir, m, k, n, full_k):
     from iron.common.compilation import KernelObjectArtifact, SourceArtifact
 
-    suffix = f"{m}_{k}_{n}"
+    suffix = f"{m}_{k}_{n}_k{full_k}"
     return [
         KernelObjectArtifact(
             f"swiglu_fused_core_{suffix}.o",
@@ -205,6 +205,7 @@ def _swiglu_fused_front_artifacts(base_dir, kernel_dir, m, k, n):
                 f"-DDIM_M={m}",
                 f"-DDIM_K={k}",
                 f"-DDIM_N={n}",
+                f"-DFULL_K={full_k}",
                 "-DAIE_API_EMULATE_BFLOAT16_MMUL_WITH_BFP16",
             ],
             rename_symbols={

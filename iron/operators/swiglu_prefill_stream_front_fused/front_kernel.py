@@ -16,21 +16,26 @@ class SwigluFrontFusedKernel(AIEKernelWithZeroing):
     m: int
     k: int
     n: int
+    full_k: int
+
+    @property
+    def suffix(self) -> str:
+        return f"{self.m}_{self.k}_{self.n}_k{self.full_k}"
 
     @property
     def zero_name(self) -> str:
-        return f"swiglu_fused_zero_{self.m}_{self.k}_{self.n}"
+        return f"swiglu_fused_zero_{self.suffix}"
 
     def zero_type(self, op: ComputationNodeOp) -> FunctionType:
         return FunctionType.from_lists(inputs=[op.inputs[2].type], outputs=[])
 
     @property
     def linkwith_name(self) -> str:
-        return f"swiglu_fused_core_{self.m}_{self.k}_{self.n}.o"
+        return f"swiglu_fused_core_{self.suffix}.o"
 
     @property
     def function_name(self) -> str:
-        return f"swiglu_front_fused_{self.m}_{self.k}_{self.n}"
+        return f"swiglu_front_fused_{self.suffix}"
 
     def operand_layouts(self) -> Sequence[TiledStridedLayout]:
         # TODO rework?

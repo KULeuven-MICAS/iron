@@ -1,6 +1,14 @@
 // SPDX-FileCopyrightText: Copyright (C) 2025 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+// SwiGLU front: the gate and up projections and the activation that joins them.
+//
+// The contraction runs across calls: the design streams the weights in FULL_K/DIM_K
+// slices and calls this kernel once per slice, so both running sums outlive a call.
+// The up projection accumulates in the output tile, which is already its shape and
+// already lives for the whole contraction; the last slice overwrites it with the
+// result. Only the gate projection needs storage of its own.
+
 #include "../aie_kernel_utils.h"
 
 #include <aie_api/aie.hpp>
@@ -20,16 +28,29 @@ using namespace aie;
 #define FULL_K 512
 #endif
 
+// TODO parametrize this again
 constexpr int TILE_M = 8;
 constexpr int TILE_K = 8;
 constexpr int TILE_N = 8;
-constexpr int K_TILES = FULL_K / DIM_K;
+
+using MMUL = aie::mmul<TILE_M, TILE_K, TILE_N, bfloat16, bfloat16, accauto>;
+using TileAccum = MMUL::accum_type;
+
+constexpr int ROW_TILES = DIM_M / TILE_M;
+constexpr int K_TILES = DIM_K / TILE_K;
+constexpr int COL_TILES = DIM_N / TILE_N;
+constexpr int REDUCTION_STEPS = FULL_K / DIM_K;
+constexpr int TILE_ELEMENTS = MMUL::size_C;
+
+static_assert(DIM_M % (2 * TILE_M) == 0);
+static_assert(DIM_K % TILE_K == 0);
+static_assert(DIM_N % (2 * TILE_N) == 0);
+static_assert(FULL_K % DIM_K == 0);
 
 // TODO these all are cursed, get these into stream:
 // * the buffers is something that stream should properly reason about and pass to this kernel
 // * the reduction step is the index of one of the stream loops and should just be passed through
 static bfloat16 gate_acc[DIM_M * DIM_N];
-static bfloat16 up_acc[DIM_M * DIM_N];
 static int reduction_step = 0;
 
 template <int N>
@@ -46,9 +67,6 @@ static inline aie::vector<bfloat16, N> silu_vec(
     return aie::mul(input, sigmoid).template to_vector<bfloat16>();
 }
 
-// TODO parametrize this again
-using MMUL = aie::mmul<8, 8, 8, bfloat16, bfloat16, accauto>;
-
 static inline void front_matmul(
     const bfloat16 *restrict input,
     const bfloat16 *restrict weights,
@@ -56,38 +74,29 @@ static inline void front_matmul(
     int matrix
 )
 {
-    constexpr int row_tiles = DIM_M / TILE_M;
-    constexpr int k_tiles = DIM_K / TILE_K;
-    constexpr int col_tiles = DIM_N / TILE_N;
-    constexpr int tile_elements = MMUL::size_C;
+    for (int row_tile = 0; row_tile < ROW_TILES; row_tile += 2) {
+        const bfloat16 *input0 = input + row_tile * K_TILES * MMUL::size_A;
+        const bfloat16 *input1 = input0 + K_TILES * MMUL::size_A;
 
-    static_assert(DIM_M % 16 == 0);
-    static_assert(DIM_K % 8 == 0);
-    static_assert(DIM_N % 16 == 0);
+        for (int col_tile = 0; col_tile < COL_TILES; col_tile += 2) {
+            const int output_tile = row_tile * COL_TILES + col_tile;
+            bfloat16 *restrict accum0 = accum + output_tile * TILE_ELEMENTS;
+            bfloat16 *restrict accum1 = accum0 + COL_TILES * TILE_ELEMENTS;
 
-    aie::set_rounding(aie::rounding_mode::conv_even);
+            MMUL c00(TileAccum(aie::load_v<TILE_ELEMENTS>(accum0)));
+            MMUL c01(TileAccum(aie::load_v<TILE_ELEMENTS>(accum0 + TILE_ELEMENTS)));
+            MMUL c10(TileAccum(aie::load_v<TILE_ELEMENTS>(accum1)));
+            MMUL c11(TileAccum(aie::load_v<TILE_ELEMENTS>(accum1 + TILE_ELEMENTS)));
 
-    for (int row_tile = 0; row_tile < row_tiles; row_tile += 2) {
-        const bfloat16 *input0 = input + row_tile * k_tiles * MMUL::size_A;
-        const bfloat16 *input1 = input0 + k_tiles * MMUL::size_A;
+            const bfloat16 *weight_tile = weights + matrix * COL_TILES * MMUL::size_B + col_tile * MMUL::size_B;
 
-        for (int col_tile = 0; col_tile < col_tiles; col_tile += 2) {
-            const int output_tile = row_tile * col_tiles + col_tile;
-            MMUL c00(aie::load_v<tile_elements>(accum + output_tile * tile_elements));
-            MMUL c01(aie::load_v<tile_elements>(accum + (output_tile + 1) * tile_elements));
-            MMUL c10(aie::load_v<tile_elements>(accum + (output_tile + col_tiles) * tile_elements));
-            MMUL c11(aie::load_v<tile_elements>(accum + (output_tile + col_tiles + 1) * tile_elements));
-
-            for (int k_tile = 0; k_tile < k_tiles; ++k_tile) {
+            AIE_LOOP_UNROLL_FULL
+            for (int k_tile = 0; k_tile < K_TILES; ++k_tile) {
                 const auto a0 = aie::load_v<MMUL::size_A>(input0 + k_tile * MMUL::size_A);
                 const auto a1 = aie::load_v<MMUL::size_A>(input1 + k_tile * MMUL::size_A);
-
-                const bfloat16 *weight_tile = weights
-                    + k_tile * 2 * col_tiles * MMUL::size_B
-                    + matrix * col_tiles * MMUL::size_B
-                    + col_tile * MMUL::size_B;
                 const auto b0 = aie::load_v<MMUL::size_B>(weight_tile);
                 const auto b1 = aie::load_v<MMUL::size_B>(weight_tile + MMUL::size_B);
+                weight_tile += 2 * COL_TILES * MMUL::size_B;
 
                 c00.mac(a0, b0);
                 c01.mac(a0, b1);
@@ -95,10 +104,10 @@ static inline void front_matmul(
                 c11.mac(a1, b1);
             }
 
-            aie::store_v(accum + output_tile * tile_elements, c00.template to_vector<bfloat16>());
-            aie::store_v(accum + (output_tile + 1) * tile_elements, c01.template to_vector<bfloat16>());
-            aie::store_v(accum + (output_tile + col_tiles) * tile_elements, c10.template to_vector<bfloat16>());
-            aie::store_v(accum + (output_tile + col_tiles + 1) * tile_elements, c11.template to_vector<bfloat16>());
+            aie::store_v(accum0, c00.to_accum().template to_vector<bfloat16>());
+            aie::store_v(accum0 + TILE_ELEMENTS, c01.to_accum().template to_vector<bfloat16>());
+            aie::store_v(accum1, c10.to_accum().template to_vector<bfloat16>());
+            aie::store_v(accum1 + TILE_ELEMENTS, c11.to_accum().template to_vector<bfloat16>());
         }
     }
 }
@@ -113,19 +122,17 @@ void front_fused(
 {
     event0();
 
+    aie::set_rounding(aie::rounding_mode::conv_even);
+
     front_matmul(input, weights, gate_acc, 0);
-    front_matmul(input, weights, up_acc, 1);
+    front_matmul(input, weights, output, 1);
 
-    ++reduction_step;
-    if (reduction_step == K_TILES) {
-        auto gate_it = aie::begin_restrict_vector<32>(gate_acc);
-        auto up_it = aie::begin_restrict_vector<32>(up_acc);
-        auto output_it = aie::begin_restrict_vector<32>(output);
-
-        for (int i = 0; i < DIM_M * DIM_N; i += 32) {
-            const auto gate = *gate_it++;
-            const auto up = *up_it++;
-            *output_it++ = aie::mul(silu_vec<32>(gate), up).template to_vector<bfloat16>();
+    if (++reduction_step == REDUCTION_STEPS) {
+        constexpr int LANES = 32;
+        for (int i = 0; i < DIM_M * DIM_N; i += LANES) {
+            const auto gate = aie::load_v<LANES>(gate_acc + i);
+            const auto up = aie::load_v<LANES>(output + i);
+            aie::store_v(output + i, aie::mul(silu_vec<LANES>(gate), up).template to_vector<bfloat16>());
         }
 
         reduction_step = 0;
@@ -135,12 +142,11 @@ void front_fused(
 
 void zero_front_fused(bfloat16 *restrict output)
 {
-    for (int i = 0; i < DIM_M * DIM_N; ++i) {
-        output[i] = 0;
-    }
-    for (int i = 0; i < DIM_M * DIM_N; ++i) {
-        gate_acc[i] = 0;
-        up_acc[i] = 0;
+    constexpr int LANES = 32;
+    const auto zero = aie::zeros<bfloat16, LANES>();
+    for (int i = 0; i < DIM_M * DIM_N; i += LANES) {
+        aie::store_v(output + i, zero);
+        aie::store_v(gate_acc + i, zero);
     }
     reduction_step = 0;
 }
