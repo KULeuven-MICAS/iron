@@ -50,21 +50,6 @@ from iron.operators.mha_prefill_stream.reference import (
     attention_core_module,
 )
 
-# Columns a GEMM layer spans, splitting its output dimension over them on top of the
-# query dimension over a column's rows. Kept at one: a distribute or a join costs one
-# object fifo per core, so widening adds DMA channels about as fast as it adds compute.
-# The hand-written operators behave the same way in this flow, and are also fastest at
-# one column.
-GEMM_COLUMNS = 1
-
-
-# The context GEMM writes d_head across its columns and its kernel takes at least a
-# 16-wide tile, so it cannot spread as far as the score GEMM, which writes the key.
-def _context_columns(d_head):
-    return min(GEMM_COLUMNS, max(d_head // 16, 1))
-
-
-SOFTMAX_COLUMN = 0
 
 # Key positions the score GEMM produces at a time. The softmax reduces the key
 # dimension and reads whole rows; a GEMM in a group of its own may block it, but one
@@ -88,16 +73,6 @@ LAYER_BY_LAYER = 3
 CORE_BYTES = 64 * 1024
 BYTES_PER_ELEMENT = 2
 
-# Which of a column's cores the softmax runs on, by index.
-SOFTMAX_CORES = (0, 1, 2, 3)
-
-# Three layers on a row each leave the array's fourth idle. The softmax costs several
-# times what the stages either side of it do, measured, so it is the layer given two of
-# the rows. The fourth core only pays for its wider fan-out once the sequence is long
-# enough: measured, equal width wins by 6.7% at 2048 and loses by 1.2% at 32768.
-_WIDE_SOFTMAX_ROWS = "0|13|2"
-_WIDE_SOFTMAX_SEQ = 8192
-
 
 @dataclass(frozen=True)
 class DesignConfig:
@@ -114,17 +89,8 @@ class DesignConfig:
     # -- it only sets DIM_M, which they take as any multiple of 16 -- and enlarging it
     # divides the number of query steps, and with it how often K and V are streamed again.
     flash_query: int = FLASH_BLOCK
-    # The score GEMM and the online softmax as one kernel on one core. Three fused layers
-    # take a row each and leave the array's fourth idle; two take two rows each and cover
-    # it, and the score block stops making a round trip through the memory tile between
-    # them.
+    # The score GEMM and the online softmax as one kernel on one core.
     fused_kernel: bool = False
-    # The fused design runs its three layers at once, so each takes one row of every
-    # column it spans and the query dimension splits over the columns, not over the rows.
-    fused_columns: int = 4
-    # Which rows of a column each fused layer sits on, as "<scores>|<softmax>|<context>",
-    # each field the row indices. None takes the default for the problem size.
-    fused_rows: str | None = None
 
     @classmethod
     def from_environment(cls) -> "DesignConfig":
@@ -132,8 +98,6 @@ class DesignConfig:
         return cls(
             flash_query=int(os.environ.get("IRON_FLASH_QUERY", FLASH_BLOCK)),
             fused_kernel=os.environ.get("IRON_FUSED_KERNEL", "0") == "1",
-            fused_columns=int(os.environ.get("IRON_FUSED_COLUMNS", "4")),
-            fused_rows=os.environ.get("IRON_FUSED_ROWS"),
         )
 
 
@@ -151,73 +115,14 @@ def group_layers(k, cfg: DesignConfig | None = None) -> list:
     }[k]
 
 
-def _default_columns(seq_len: int, cfg: DesignConfig) -> int:
-    """The widest column count the query still splits over in whole blocks.
-
-    Fixing it at the narrowest one every supported sequence divides by leaves most of
-    the array idle: measured, eight columns beat four by 1.08x at 512 and 1.87x at 4096.
-    """
-    grid = array()
-    for columns in range(grid.num_columns, 0, -1):
-        if not seq_len % (cfg.flash_query * columns):
-            return columns
-    return cfg.fused_columns
-
-
-def _resolved(cfg: DesignConfig, seq_len: int, k: int, flash: bool) -> DesignConfig:
-    """The config a design is built with, once the sequence has had its say."""
-    if not (flash and k == 1) or os.environ.get("IRON_FUSED_COLUMNS"):
-        return cfg
-    return replace(cfg, fused_columns=_default_columns(seq_len, cfg))
-
-
-def _default_rows(seq_len: int, flash: bool, cfg: DesignConfig) -> str:
-    if cfg.fused_kernel:
-        # The running scale crosses between a step's two halves through the memory the
-        # tiles already share, so each core needs its partner directly above or below it
-        # and no other: 1 and 2 against 0 and 3 is the one split where that holds.
-        return "12|03"
-    if (
-        flash
-        and seq_len >= _WIDE_SOFTMAX_SEQ
-        and not seq_len % (cfg.flash_query * cfg.fused_columns * 2)
-    ):
-        return _WIDE_SOFTMAX_ROWS
-    return "0|1|2"
-
-
-def fused_rows(
-    seq_len: int = 0, flash: bool = False, cfg: DesignConfig | None = None
-) -> dict:
-    """Which rows of a column each fused layer sits on, read off ``cfg.fused_rows``."""
-    cfg = cfg or DesignConfig.from_environment()
-    spec = cfg.fused_rows or _default_rows(seq_len, flash, cfg)
-    return dict(
-        zip(
-            [*score_layers(cfg), CONTEXT_NODE],
-            (tuple(int(c) for c in field) for field in spec.split("|")),
-        )
-    )
-
-
 # Query positions a fused GEMM works at a time. The head's whole key or value sits on the
 # core beside them -- 32 KB of a 64 KB core at seq_len 256 -- so the tile is what is left.
 FUSED_QUERY_TILE = 16
 
 
-def query_split(k, seq_len=0, flash=False, cfg=None):
-    """How many cores the query dimension splits over: a column's rows while each layer
-    has the column to itself, the columns once the three layers take a row each."""
-    if k != 1:
-        return array().num_rows
-    cfg = cfg or DesignConfig.from_environment()
-    return cfg.fused_columns * max(
-        len(rows) for rows in fused_rows(seq_len, flash, cfg).values()
-    )
-
-
 def query_per_core(seq_len, k, flash=False, cfg=None):
-    return seq_len // query_split(k, seq_len, flash, cfg)
+    """Query positions one core holds when a layer has a column to itself."""
+    return seq_len // array().num_rows
 
 
 def query_tile(seq_len, k, flash=False, cfg=None):
@@ -250,7 +155,7 @@ def _scores_tile(seq_len, d_head, k, flash=False, cfg=None):
     cfg = cfg or DesignConfig.from_environment()
     if flash:
         return cfg.flash_query, d_head, FLASH_BLOCK
-    query, key = query_tile(seq_len, k, cfg=cfg), seq_len // GEMM_COLUMNS
+    query, key = query_tile(seq_len, k, cfg=cfg), seq_len
     if k == 1:
         return query, d_head, seq_len
     if key > _KEY_BLOCK:
@@ -267,7 +172,7 @@ def kernel_tiles(seq_len, d_head, k, flash=False, cfg=None):
         CONTEXT_NODE: (
             query_tile(seq_len, k, flash, cfg),
             key_tile(seq_len, k, flash),
-            d_head // _context_columns(d_head),
+            d_head,
         ),
     }
 
@@ -302,12 +207,7 @@ def _placements(seq_len, d_head, k, causal, flash=False, cfg=None):
     the query over the column's rows, a GEMM its output dimension over the columns too.
     """
     cfg = cfg or DesignConfig.from_environment()
-    grid = array()
     tiles = kernel_tiles(seq_len, d_head, k, flash, cfg)
-
-    def split(cols):
-        """Rows always, columns only when there is more than one to split over."""
-        return (("D0", grid.num_rows),) + ((("D2", cols),) if cols > 1 else ())
 
     gemm = lambda m, contraction, n: dict(  # noqa: E731
         m=m,
@@ -330,8 +230,6 @@ def _placements(seq_len, d_head, k, causal, flash=False, cfg=None):
         # query attends a suffix of it and the kernel drops that suffix before it reduces.
         softmax["causal"] = True
     if k == 1:
-        rows = fused_rows(seq_len, flash, cfg)
-        columns = grid.all_columns[: cfg.fused_columns]
         if cfg.fused_kernel:
             # The mask lives inside the fused kernel, the way it already does inside the
             # softmax, so the score side asks for no causal entry point of its own.
@@ -341,48 +239,20 @@ def _placements(seq_len, d_head, k, causal, flash=False, cfg=None):
                 | {"flash": True, "utilization": CONTEXT_UTILIZATION},
             }
         else:
-            # Wider than the layer it feeds, the softmax hands its block straight to those
-            # cores: no memory tile in that handover to re-lay it out, so the kernel leaves
-            # it in the tiling the accumulation reads.
-            handing_over = len(rows[SOFTMAX_NODE]) > len(rows[CONTEXT_NODE])
             kwargs = {
                 SCORES_NODE: gemm(*tiles[SCORES_NODE])
                 | ({"causal": True} if flash else {}),
-                SOFTMAX_NODE: softmax | ({"tiled_out": True} if handing_over else {}),
+                SOFTMAX_NODE: softmax,
                 CONTEXT_NODE: gemm(*tiles[CONTEXT_NODE])
                 | (
                     {"flash": True, "utilization": CONTEXT_UTILIZATION} if flash else {}
                 ),
             }
-        return {
-            layer: Placement(
-                columns,
-                (("D0", cfg.fused_columns * len(rows[layer])),),
-                kw,
-                rows=rows[layer],
-                # These layers hand to one another core to core, so a layer on several rows
-                # has to keep its cores in the column of the core it hands to.
-                by_row=True,
-            )
-            for layer, kw in kwargs.items()
-        }
+        return {layer: Placement((), kernel_kwargs=kw) for layer, kw in kwargs.items()}
     return {
-        SCORES_NODE: Placement(
-            grid.all_columns[:GEMM_COLUMNS],
-            split(GEMM_COLUMNS),
-            gemm(*tiles[SCORES_NODE]),
-        ),
-        SOFTMAX_NODE: Placement(
-            (SOFTMAX_COLUMN,),
-            (("D0", len(SOFTMAX_CORES)),),
-            softmax,
-            rows=SOFTMAX_CORES,
-        ),
-        CONTEXT_NODE: Placement(
-            grid.all_columns[: _context_columns(d_head)],
-            split(_context_columns(d_head)),
-            gemm(*tiles[CONTEXT_NODE]),
-        ),
+        SCORES_NODE: Placement((), kernel_kwargs=gemm(*tiles[SCORES_NODE])),
+        SOFTMAX_NODE: Placement((), kernel_kwargs=softmax),
+        CONTEXT_NODE: Placement((), kernel_kwargs=gemm(*tiles[CONTEXT_NODE])),
     }
 
 
@@ -424,19 +294,16 @@ def _check_shapes(seq_len, d_head, k, flash=False, cfg=None):
                 f"a flash score core needs {resident} bytes for a {cfg.flash_query} "
                 f"query block, over the {CORE_BYTES} byte core"
             )
-        if seq_len % (cfg.flash_query * cfg.fused_columns):
+        if seq_len % cfg.flash_query:
             # A query block shorter than the kernel's would read a scale row the
             # per-block reset does not clear.
             raise ValueError(
-                f"seq_len {seq_len} must be a multiple of "
-                f"{cfg.flash_query * cfg.fused_columns}: the query splits over "
-                f"{cfg.fused_columns} columns in whole blocks of {cfg.flash_query}"
+                f"seq_len {seq_len} must be a multiple of the {cfg.flash_query} query block"
             )
         return
     for name, extent, split in (
-        ("query", seq_len, query_split(k, cfg=cfg)),
-        ("key", seq_len, GEMM_COLUMNS),
-        ("head", d_head, _context_columns(d_head)),
+        ("query", seq_len, array().num_rows),
+        ("head", d_head, 1),
     ):
         if extent % split or (extent // split) % 16:
             # A GEMM tile must be a multiple of its MAC dimensions.
@@ -484,7 +351,7 @@ def build_inputs(
     seq_len, d_head, output_dir, k=LAYER_BY_LAYER, causal=False, flash=False, cfg=None
 ):
     """Write the workload and mapping for one configuration; return their paths."""
-    cfg = _resolved(cfg or DesignConfig.from_environment(), seq_len, k, flash)
+    cfg = cfg or DesignConfig.from_environment()
     _check_shapes(seq_len, d_head, k, flash, cfg)
     workload = workload_for(seq_len, d_head, flash, flash and cfg.fused_kernel)
     output_dir = Path(output_dir)
@@ -501,19 +368,11 @@ def build_inputs(
 
 
 def _experiment_id(seq_len, d_head, k, causal, flash, cfg=None):
-    cfg = _resolved(cfg or DesignConfig.from_environment(), seq_len, k, flash)
+    cfg = cfg or DesignConfig.from_environment()
     suffix = f"_k{k}" if k != LAYER_BY_LAYER else ""
-    # The fused designs split the query over the config's columns and nothing else in
-    # the id records it, so without this a sweep over it is served the first design.
     if k == 1:
-        suffix += f"_c{cfg.fused_columns}"
         if flash and cfg.flash_query != FLASH_BLOCK:
             suffix += f"_q{cfg.flash_query}"
-        spec = "".join(
-            "|" + "".join(str(r) for r in rs)
-            for rs in fused_rows(seq_len, flash, cfg).values()
-        )
-        suffix += "_r" + spec.lstrip("|").replace("|", "_")
         # Fusing the score side is a different graph, not just a different placement.
         if cfg.fused_kernel:
             suffix += "_fused"

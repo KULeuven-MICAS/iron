@@ -1,0 +1,1 @@
+/home/micas/iron-stream-dse/experiments/smimpact_0/eq_ours_s1024_c0_h24/op0_mm_64_64_64.o.d

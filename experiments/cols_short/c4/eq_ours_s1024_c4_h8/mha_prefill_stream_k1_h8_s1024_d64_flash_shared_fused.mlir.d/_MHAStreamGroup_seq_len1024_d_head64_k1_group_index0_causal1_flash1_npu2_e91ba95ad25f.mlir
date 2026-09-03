@@ -1,0 +1,1 @@
+/home/micas/iron-stream-dse/experiments/cols_short/c4/eq_ours_s1024_c4_h8/_MHAStreamGroup_seq_len1024_d_head64_k1_group_index0_causal1_flash1_npu2_e91ba95ad25f.mlir

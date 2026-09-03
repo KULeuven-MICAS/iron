@@ -1,0 +1,1 @@
+/home/micas/iron-stream-dse/experiments/swsw/iron_s256_e2048_h8192/GEMM_M256_K8192_N2048_tm64_tk64_tn64_bc0_cc0_c8_npu2.mlir

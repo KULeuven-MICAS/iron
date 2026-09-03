@@ -1,0 +1,1 @@
+/home/micas/iron-stream-dse/experiments/sweep_260902/mha/eq_mha_s2048_p8_h48/MHA_h48_s2048_d64_kv0_npu2.mlir

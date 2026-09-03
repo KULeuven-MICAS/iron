@@ -101,14 +101,21 @@ def group_boundaries(
 def _layer_entry(
     name: str, placement: Placement, kernel_key: str, array: ComputeArray
 ) -> dict:
+    # No columns means no declared placement: stream's PlacementGenerationStage
+    # derives the cores and the split from the workload and the kernels.
+    placed = bool(placement.columns)
     return {
         "name": name,
-        "core_allocation": [
-            list(array.cores(placement.columns, placement.rows, placement.by_row))
-        ],
-        "inter_core_tiling": [
-            [{"dim": dim, "split": split} for dim, split in placement.splits]
-        ],
+        "core_allocation": (
+            [list(array.cores(placement.columns, placement.rows, placement.by_row))]
+            if placed
+            else []
+        ),
+        "inter_core_tiling": (
+            [[{"dim": dim, "split": split} for dim, split in placement.splits]]
+            if placed
+            else []
+        ),
         "kernel": {"name": kernel_key, "kwargs": dict(placement.kernel_kwargs)},
     }
 

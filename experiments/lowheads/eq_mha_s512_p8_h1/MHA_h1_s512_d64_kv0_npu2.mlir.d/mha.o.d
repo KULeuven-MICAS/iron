@@ -1,0 +1,1 @@
+/home/micas/iron-stream-dse/experiments/lowheads/eq_mha_s512_p8_h1/mha.o.d

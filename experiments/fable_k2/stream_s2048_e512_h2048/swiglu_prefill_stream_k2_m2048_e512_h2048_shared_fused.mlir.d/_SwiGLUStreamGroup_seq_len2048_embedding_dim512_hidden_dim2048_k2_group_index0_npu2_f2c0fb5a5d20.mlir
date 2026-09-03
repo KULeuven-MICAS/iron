@@ -1,0 +1,1 @@
+/home/micas/iron-stream-dse/experiments/fable_k2/stream_s2048_e512_h2048/_SwiGLUStreamGroup_seq_len2048_embedding_dim512_hidden_dim2048_k2_group_index0_npu2_f2c0fb5a5d20.mlir

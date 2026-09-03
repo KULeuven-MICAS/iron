@@ -1,0 +1,2 @@
+eltwise_mul_bf16_scalar op0_eltwise_mul_bf16_scalar
+eltwise_mul_bf16_vector op0_eltwise_mul_bf16_vector

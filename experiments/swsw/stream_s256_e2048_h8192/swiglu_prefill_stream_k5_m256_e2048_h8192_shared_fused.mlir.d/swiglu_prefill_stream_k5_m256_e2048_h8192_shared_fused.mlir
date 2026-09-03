@@ -1,0 +1,1 @@
+/home/micas/iron-stream-dse/experiments/swsw/stream_s256_e2048_h8192/swiglu_prefill_stream_k5_m256_e2048_h8192_shared_fused.mlir

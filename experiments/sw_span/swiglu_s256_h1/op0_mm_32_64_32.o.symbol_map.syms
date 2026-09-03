@@ -1,0 +1,4 @@
+00000000 T matmul_bf16_bf16_32_64_32
+00000000 T matmul_scalar_bf16_bf16
+00000000 T zero_bf16_32_64_32
+00000000 T zero_scalar_bf16

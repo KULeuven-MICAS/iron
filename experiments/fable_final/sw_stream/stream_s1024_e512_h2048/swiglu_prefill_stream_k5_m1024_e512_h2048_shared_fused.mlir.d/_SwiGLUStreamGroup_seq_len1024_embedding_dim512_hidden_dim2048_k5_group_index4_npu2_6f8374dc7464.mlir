@@ -1,0 +1,1 @@
+/home/micas/iron-stream-dse/experiments/fable_final/sw_stream/stream_s1024_e512_h2048/_SwiGLUStreamGroup_seq_len1024_embedding_dim512_hidden_dim2048_k5_group_index4_npu2_6f8374dc7464.mlir

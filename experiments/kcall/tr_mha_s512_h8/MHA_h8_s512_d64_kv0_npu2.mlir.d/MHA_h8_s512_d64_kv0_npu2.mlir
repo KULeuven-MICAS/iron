@@ -1,0 +1,1 @@
+/home/micas/iron-stream-dse/experiments/kcall/tr_mha_s512_h8/MHA_h8_s512_d64_kv0_npu2.mlir

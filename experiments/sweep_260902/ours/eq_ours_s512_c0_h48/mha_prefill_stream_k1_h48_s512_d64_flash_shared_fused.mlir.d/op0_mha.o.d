@@ -1,0 +1,1 @@
+/home/micas/iron-stream-dse/experiments/sweep_260902/ours/eq_ours_s512_c0_h48/op0_mha.o.d

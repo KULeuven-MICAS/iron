@@ -1,0 +1,1 @@
+/home/micas/iron-stream-dse/experiments/fable_final/sw_iron/iron_s512_e512_h2048/GEMM_M512_K2048_N512_tm64_tk64_tn64_bc0_cc0_c8_npu2.mlir

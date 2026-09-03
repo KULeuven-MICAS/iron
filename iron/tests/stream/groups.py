@@ -219,21 +219,21 @@ def test_generated_group_resolves_its_kernels(design, dims, k, index):
 def test_a_design_config_reads_the_environment_it_is_not_given(monkeypatch):
     """The sweep hooks are the config's defaults, so a harness that sets the environment
     and passes no config still gets the design it asks for."""
-    monkeypatch.setenv("IRON_FUSED_COLUMNS", "2")
-    monkeypatch.setenv("IRON_FUSED_ROWS", "0|13|2")
+    monkeypatch.setenv("IRON_FLASH_QUERY", "128")
+    monkeypatch.setenv("IRON_FUSED_KERNEL", "1")
     cfg = mha.DesignConfig.from_environment()
-    assert (cfg.fused_columns, cfg.fused_rows) == (2, "0|13|2")
-    assert mha.DesignConfig() == mha.DesignConfig(flash_query=64, fused_columns=4)
+    assert (cfg.flash_query, cfg.fused_kernel) == (128, True)
+    assert mha.DesignConfig() == mha.DesignConfig(flash_query=64)
 
 
 def test_two_configs_give_two_designs_in_one_process(tmp_path):
     """A config is a value the operator carries, not module state: neither of these
     fixes the other, which constants read from the environment at import could not."""
     mappings = []
-    for columns in (2, 4):
-        cfg = mha.DesignConfig(fused_columns=columns)
+    for query in (64, 128):
+        cfg = mha.DesignConfig(flash_query=query)
         _, path = mha.build_inputs(
-            256, 64, output_dir=str(tmp_path / f"c{columns}"), k=1, flash=True, cfg=cfg
+            256, 64, output_dir=str(tmp_path / f"q{query}"), k=1, flash=True, cfg=cfg
         )
         assert group_findings(yaml.safe_load(Path(path).read_text()), 0) == []
         mappings.append(Path(path).read_text())

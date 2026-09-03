@@ -1,0 +1,4 @@
+matmul_bf16_bf16_64_64_64 op3_matmul_bf16_bf16_64_64_64
+matmul_scalar_bf16_bf16 op3_matmul_scalar_bf16_bf16
+zero_bf16_64_64_64 op3_zero_bf16_64_64_64
+zero_scalar_bf16 op3_zero_scalar_bf16

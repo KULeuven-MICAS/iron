@@ -120,60 +120,40 @@ def default_groups(hidden_dim):
 
 
 def _placements(k, hidden_dim):
-    """Where each layer runs.
+    """The kernel of each layer; where they run is stream's PlacementGenerationStage.
 
-    Fused (k=1, k=2): the layers sit on disjoint columns, two per GEMM and one per
-    elementwise layer, so they pipeline across steady-state iterations. Each splits
-    over the array's rows (D0, the sequence dimension) and a GEMM over its two
-    columns as well (D2, the output dimension).
-
-    Layer by layer (k=5): the layers run in turn, so each takes the whole array.
-    The GEMMs use every row; the elementwise layers take one core per column and
-    split the sequence across them, the shape IRON's channeled operators use. They
-    also read whole rows, so their transfers to and from memory are contiguous.
+    Split per layer, the elementwise kernels read whole rows so their transfers to and
+    from memory are contiguous; fused behind a GEMM they take the block that GEMM
+    writes, in the layout it writes it.
     """
-    grid = array()
-    sequence_tile, _, hidden_tile = block_for(k)
     tiles = gemm_blocks(k)
 
-    def gemm(tiles):
-        return dict(
-            zip("mkn", tiles), utilization=61.8, layout="default", bfp16_mmul=True
-        )
-
-    def elementwise(rows, columns, layout, bfp16_mmul=False):
-        return {
-            "utilization": 50.0,
-            "layout": layout,
-            "m": rows,
-            "n": columns,
-            "bfp16_mmul": bfp16_mmul,
-        }
+    def gemm(block):
+        return dict(zip("mkn", block), utilization=61.8, layout="default", bfp16_mmul=True)
 
     if k == LAYER_BY_LAYER:
-        wide = grid.all_columns
-        gemm_split = (("D0", grid.num_rows), ("D2", grid.num_columns))
-        elementwise_split = (("D0", grid.num_columns),)
-        rows_wide = elementwise(ELEMENTWISE_ROWS, _row_width(hidden_dim), "contiguous")
-        return {
-            GATE: Placement(wide, gemm_split, gemm(tiles[GATE])),
-            UP: Placement(wide, gemm_split, gemm(tiles[UP])),
-            SILU: Placement(wide, elementwise_split, rows_wide, rows=[0]),
-            MUL: Placement(wide, elementwise_split, rows_wide, rows=[0]),
-            DOWN: Placement(wide, gemm_split, gemm(tiles[DOWN])),
-        }
-
-    columns = dict(zip(NODE_NAMES, grid.allocate([2, 2, 1, 1, 2])))
-    gemm_split = (("D0", grid.num_rows), ("D2", 2))
-    elementwise_split = (("D0", grid.num_rows),)
-    # Fused behind a GEMM, so the operands take the layout that GEMM writes.
-    fused = elementwise(sequence_tile, hidden_tile, "default", bfp16_mmul=True)
+        wide = elementwise(1, _row_width(hidden_dim), "contiguous")
+        elementwise_kwargs = {SILU: wide, MUL: wide}
+    else:
+        sequence_tile, _, hidden_tile = block_for(k)
+        fused = elementwise(sequence_tile, hidden_tile, "default", bfp16_mmul=True)
+        elementwise_kwargs = {SILU: fused, MUL: fused}
     return {
-        GATE: Placement(columns[GATE], gemm_split, gemm(tiles[GATE])),
-        UP: Placement(columns[UP], gemm_split, gemm(tiles[UP])),
-        SILU: Placement(columns[SILU], elementwise_split, fused),
-        MUL: Placement(columns[MUL], elementwise_split, fused),
-        DOWN: Placement(columns[DOWN], gemm_split, gemm(tiles[DOWN])),
+        GATE: Placement((), kernel_kwargs=gemm(tiles[GATE])),
+        UP: Placement((), kernel_kwargs=gemm(tiles[UP])),
+        SILU: Placement((), kernel_kwargs=elementwise_kwargs[SILU]),
+        MUL: Placement((), kernel_kwargs=elementwise_kwargs[MUL]),
+        DOWN: Placement((), kernel_kwargs=gemm(tiles[DOWN])),
+    }
+
+
+def elementwise(rows, columns, layout, bfp16_mmul=False):
+    return {
+        "utilization": 50.0,
+        "layout": layout,
+        "m": rows,
+        "n": columns,
+        "bfp16_mmul": bfp16_mmul,
     }
 
 

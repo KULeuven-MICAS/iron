@@ -1,0 +1,1 @@
+/home/micas/iron-stream-dse/experiments/swiglu_flows/iron_s512_e512_h2048/ElementwiseMul_sz1048576_t256_col8_npu2.mlir

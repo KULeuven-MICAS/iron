@@ -1,0 +1,1 @@
+/home/micas/iron-stream-dse/experiments/disp256/eq_mha_s256_p8_h4/MHA_h4_s256_d64_kv0_npu2.mlir

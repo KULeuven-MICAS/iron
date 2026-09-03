@@ -1,0 +1,1 @@
+/home/micas/iron-stream-dse/experiments/smimpact_0/eq_mha_s4096_p8_h24/mha.o.d

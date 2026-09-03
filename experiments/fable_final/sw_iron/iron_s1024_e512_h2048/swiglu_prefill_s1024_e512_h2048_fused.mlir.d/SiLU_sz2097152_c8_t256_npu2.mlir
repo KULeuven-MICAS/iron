@@ -1,0 +1,1 @@
+/home/micas/iron-stream-dse/experiments/fable_final/sw_iron/iron_s1024_e512_h2048/SiLU_sz2097152_c8_t256_npu2.mlir

@@ -1,0 +1,1 @@
+/home/micas/iron-stream-dse/experiments/smimpact_0/eq_ours_s1024_c0_h24/mha_prefill_stream_k1_h24_s1024_d64_flash_shared_fused.mlir

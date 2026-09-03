@@ -1,0 +1,1 @@
+/home/micas/iron-stream-dse/experiments/memwin/ours_s512_h1/_MHAStreamGroup_seq_len512_d_head64_k1_group_index0_causal1_flash1_npu2_aae77f470008.mlir

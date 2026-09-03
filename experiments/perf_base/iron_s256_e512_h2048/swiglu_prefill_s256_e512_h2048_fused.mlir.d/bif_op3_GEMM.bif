@@ -1,0 +1,14 @@
+all:
+{
+  id_code = 0x14ca8093
+  extended_id_code = 0x01
+  image
+  {
+    name=aie_image, id=0x1c000000
+    { type=cdo
+      file=/home/micas/iron-stream-dse/experiments/perf_base/iron_s256_e512_h2048/swiglu_prefill_s256_e512_h2048_fused.mlir.d/cdo_op3_GEMM/op3_GEMM_aie_cdo_elfs.bin
+      file=/home/micas/iron-stream-dse/experiments/perf_base/iron_s256_e512_h2048/swiglu_prefill_s256_e512_h2048_fused.mlir.d/cdo_op3_GEMM/op3_GEMM_aie_cdo_init.bin
+      file=/home/micas/iron-stream-dse/experiments/perf_base/iron_s256_e512_h2048/swiglu_prefill_s256_e512_h2048_fused.mlir.d/cdo_op3_GEMM/op3_GEMM_aie_cdo_enable.bin
+    }
+  }
+}

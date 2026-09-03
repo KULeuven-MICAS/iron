@@ -1,0 +1,1 @@
+/home/micas/iron-stream-dse/experiments/flowcmp/xclbin_s4096_h24/MHA_h24_s4096_d64_kv0_npu2.mlir

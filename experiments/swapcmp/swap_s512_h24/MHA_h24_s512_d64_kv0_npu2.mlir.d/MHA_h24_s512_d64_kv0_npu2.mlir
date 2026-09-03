@@ -1,0 +1,1 @@
+/home/micas/iron-stream-dse/experiments/swapcmp/swap_s512_h24/MHA_h24_s512_d64_kv0_npu2.mlir

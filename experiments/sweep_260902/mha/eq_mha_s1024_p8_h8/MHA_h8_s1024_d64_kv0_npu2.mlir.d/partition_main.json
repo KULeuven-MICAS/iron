@@ -1,0 +1,33 @@
+{
+  "aie_partition": {
+    "PDIs": [
+      {
+        "cdo_groups": [
+          {
+            "dpu_kernel_ids": [
+              "0x901"
+            ],
+            "name": "DPU",
+            "pdi_id": "0x01",
+            "pre_cdo_groups": [
+              "0xC1"
+            ],
+            "type": "PRIMARY"
+          }
+        ],
+        "file_name": "/home/micas/iron-stream-dse/experiments/sweep_260902/mha/eq_mha_s1024_p8_h8/MHA_h8_s1024_d64_kv0_npu2.mlir.d/main.pdi",
+        "uuid": "129e8376-7959-4c24-bf63-46851b11dd5d"
+      }
+    ],
+    "inference_fingerprint": "23423",
+    "name": "QoS",
+    "operations_per_cycle": "2048",
+    "partition": {
+      "column_width": 8,
+      "start_columns": [
+        0
+      ]
+    },
+    "pre_post_fingerprint": "12345"
+  }
+}

@@ -1,0 +1,284 @@
+{
+  "xrt-kernels": [
+    {
+      "PDIs": [
+        {
+          "PDI_file": "/home/micas/iron-stream-dse/experiments/sw_seq/iron_s2048_e512_h2048/swiglu_prefill_s2048_e512_h2048_fused.mlir.d/empty_1.pdi",
+          "id": 1
+        },
+        {
+          "PDI_file": "/home/micas/iron-stream-dse/experiments/sw_seq/iron_s2048_e512_h2048/swiglu_prefill_s2048_e512_h2048_fused.mlir.d/empty_0.pdi",
+          "id": 2
+        },
+        {
+          "PDI_file": "/home/micas/iron-stream-dse/experiments/sw_seq/iron_s2048_e512_h2048/swiglu_prefill_s2048_e512_h2048_fused.mlir.d/op0_GEMM.pdi",
+          "id": 3
+        },
+        {
+          "PDI_file": "/home/micas/iron-stream-dse/experiments/sw_seq/iron_s2048_e512_h2048/swiglu_prefill_s2048_e512_h2048_fused.mlir.d/op1_SiLU.pdi",
+          "id": 4
+        },
+        {
+          "PDI_file": "/home/micas/iron-stream-dse/experiments/sw_seq/iron_s2048_e512_h2048/swiglu_prefill_s2048_e512_h2048_fused.mlir.d/op2_ElementwiseMul.pdi",
+          "id": 5
+        },
+        {
+          "PDI_file": "/home/micas/iron-stream-dse/experiments/sw_seq/iron_s2048_e512_h2048/swiglu_prefill_s2048_e512_h2048_fused.mlir.d/op3_GEMM.pdi",
+          "id": 6
+        },
+        {
+          "PDI_file": "/home/micas/iron-stream-dse/experiments/sw_seq/iron_s2048_e512_h2048/swiglu_prefill_s2048_e512_h2048_fused.mlir.d/main.pdi",
+          "id": 7
+        }
+      ],
+      "arguments": [
+        {
+          "name": "arg_0",
+          "offset": "0x0",
+          "type": "char *"
+        },
+        {
+          "name": "arg_1",
+          "offset": "0x8",
+          "type": "char *"
+        },
+        {
+          "name": "arg_2",
+          "offset": "0x10",
+          "type": "char *"
+        }
+      ],
+      "instance": [
+        {
+          "TXN_ctrl_code_file": "/home/micas/iron-stream-dse/experiments/sw_seq/iron_s2048_e512_h2048/swiglu_prefill_s2048_e512_h2048_fused.mlir.d/npu_insts_full_elf_op0_GEMM_sequence.bin",
+          "id": "sequence"
+        }
+      ],
+      "name": "op0_GEMM"
+    },
+    {
+      "PDIs": [
+        {
+          "PDI_file": "/home/micas/iron-stream-dse/experiments/sw_seq/iron_s2048_e512_h2048/swiglu_prefill_s2048_e512_h2048_fused.mlir.d/empty_1.pdi",
+          "id": 1
+        },
+        {
+          "PDI_file": "/home/micas/iron-stream-dse/experiments/sw_seq/iron_s2048_e512_h2048/swiglu_prefill_s2048_e512_h2048_fused.mlir.d/empty_0.pdi",
+          "id": 2
+        },
+        {
+          "PDI_file": "/home/micas/iron-stream-dse/experiments/sw_seq/iron_s2048_e512_h2048/swiglu_prefill_s2048_e512_h2048_fused.mlir.d/op0_GEMM.pdi",
+          "id": 3
+        },
+        {
+          "PDI_file": "/home/micas/iron-stream-dse/experiments/sw_seq/iron_s2048_e512_h2048/swiglu_prefill_s2048_e512_h2048_fused.mlir.d/op1_SiLU.pdi",
+          "id": 4
+        },
+        {
+          "PDI_file": "/home/micas/iron-stream-dse/experiments/sw_seq/iron_s2048_e512_h2048/swiglu_prefill_s2048_e512_h2048_fused.mlir.d/op2_ElementwiseMul.pdi",
+          "id": 5
+        },
+        {
+          "PDI_file": "/home/micas/iron-stream-dse/experiments/sw_seq/iron_s2048_e512_h2048/swiglu_prefill_s2048_e512_h2048_fused.mlir.d/op3_GEMM.pdi",
+          "id": 6
+        },
+        {
+          "PDI_file": "/home/micas/iron-stream-dse/experiments/sw_seq/iron_s2048_e512_h2048/swiglu_prefill_s2048_e512_h2048_fused.mlir.d/main.pdi",
+          "id": 7
+        }
+      ],
+      "arguments": [
+        {
+          "name": "arg_0",
+          "offset": "0x0",
+          "type": "char *"
+        },
+        {
+          "name": "arg_1",
+          "offset": "0x8",
+          "type": "char *"
+        },
+        {
+          "name": "arg_2",
+          "offset": "0x10",
+          "type": "char *"
+        }
+      ],
+      "instance": [
+        {
+          "TXN_ctrl_code_file": "/home/micas/iron-stream-dse/experiments/sw_seq/iron_s2048_e512_h2048/swiglu_prefill_s2048_e512_h2048_fused.mlir.d/npu_insts_full_elf_op1_SiLU_sequence.bin",
+          "id": "sequence"
+        }
+      ],
+      "name": "op1_SiLU"
+    },
+    {
+      "PDIs": [
+        {
+          "PDI_file": "/home/micas/iron-stream-dse/experiments/sw_seq/iron_s2048_e512_h2048/swiglu_prefill_s2048_e512_h2048_fused.mlir.d/empty_1.pdi",
+          "id": 1
+        },
+        {
+          "PDI_file": "/home/micas/iron-stream-dse/experiments/sw_seq/iron_s2048_e512_h2048/swiglu_prefill_s2048_e512_h2048_fused.mlir.d/empty_0.pdi",
+          "id": 2
+        },
+        {
+          "PDI_file": "/home/micas/iron-stream-dse/experiments/sw_seq/iron_s2048_e512_h2048/swiglu_prefill_s2048_e512_h2048_fused.mlir.d/op0_GEMM.pdi",
+          "id": 3
+        },
+        {
+          "PDI_file": "/home/micas/iron-stream-dse/experiments/sw_seq/iron_s2048_e512_h2048/swiglu_prefill_s2048_e512_h2048_fused.mlir.d/op1_SiLU.pdi",
+          "id": 4
+        },
+        {
+          "PDI_file": "/home/micas/iron-stream-dse/experiments/sw_seq/iron_s2048_e512_h2048/swiglu_prefill_s2048_e512_h2048_fused.mlir.d/op2_ElementwiseMul.pdi",
+          "id": 5
+        },
+        {
+          "PDI_file": "/home/micas/iron-stream-dse/experiments/sw_seq/iron_s2048_e512_h2048/swiglu_prefill_s2048_e512_h2048_fused.mlir.d/op3_GEMM.pdi",
+          "id": 6
+        },
+        {
+          "PDI_file": "/home/micas/iron-stream-dse/experiments/sw_seq/iron_s2048_e512_h2048/swiglu_prefill_s2048_e512_h2048_fused.mlir.d/main.pdi",
+          "id": 7
+        }
+      ],
+      "arguments": [
+        {
+          "name": "arg_0",
+          "offset": "0x0",
+          "type": "char *"
+        },
+        {
+          "name": "arg_1",
+          "offset": "0x8",
+          "type": "char *"
+        },
+        {
+          "name": "arg_2",
+          "offset": "0x10",
+          "type": "char *"
+        }
+      ],
+      "instance": [
+        {
+          "TXN_ctrl_code_file": "/home/micas/iron-stream-dse/experiments/sw_seq/iron_s2048_e512_h2048/swiglu_prefill_s2048_e512_h2048_fused.mlir.d/npu_insts_full_elf_op2_ElementwiseMul_sequence.bin",
+          "id": "sequence"
+        }
+      ],
+      "name": "op2_ElementwiseMul"
+    },
+    {
+      "PDIs": [
+        {
+          "PDI_file": "/home/micas/iron-stream-dse/experiments/sw_seq/iron_s2048_e512_h2048/swiglu_prefill_s2048_e512_h2048_fused.mlir.d/empty_1.pdi",
+          "id": 1
+        },
+        {
+          "PDI_file": "/home/micas/iron-stream-dse/experiments/sw_seq/iron_s2048_e512_h2048/swiglu_prefill_s2048_e512_h2048_fused.mlir.d/empty_0.pdi",
+          "id": 2
+        },
+        {
+          "PDI_file": "/home/micas/iron-stream-dse/experiments/sw_seq/iron_s2048_e512_h2048/swiglu_prefill_s2048_e512_h2048_fused.mlir.d/op0_GEMM.pdi",
+          "id": 3
+        },
+        {
+          "PDI_file": "/home/micas/iron-stream-dse/experiments/sw_seq/iron_s2048_e512_h2048/swiglu_prefill_s2048_e512_h2048_fused.mlir.d/op1_SiLU.pdi",
+          "id": 4
+        },
+        {
+          "PDI_file": "/home/micas/iron-stream-dse/experiments/sw_seq/iron_s2048_e512_h2048/swiglu_prefill_s2048_e512_h2048_fused.mlir.d/op2_ElementwiseMul.pdi",
+          "id": 5
+        },
+        {
+          "PDI_file": "/home/micas/iron-stream-dse/experiments/sw_seq/iron_s2048_e512_h2048/swiglu_prefill_s2048_e512_h2048_fused.mlir.d/op3_GEMM.pdi",
+          "id": 6
+        },
+        {
+          "PDI_file": "/home/micas/iron-stream-dse/experiments/sw_seq/iron_s2048_e512_h2048/swiglu_prefill_s2048_e512_h2048_fused.mlir.d/main.pdi",
+          "id": 7
+        }
+      ],
+      "arguments": [
+        {
+          "name": "arg_0",
+          "offset": "0x0",
+          "type": "char *"
+        },
+        {
+          "name": "arg_1",
+          "offset": "0x8",
+          "type": "char *"
+        },
+        {
+          "name": "arg_2",
+          "offset": "0x10",
+          "type": "char *"
+        }
+      ],
+      "instance": [
+        {
+          "TXN_ctrl_code_file": "/home/micas/iron-stream-dse/experiments/sw_seq/iron_s2048_e512_h2048/swiglu_prefill_s2048_e512_h2048_fused.mlir.d/npu_insts_full_elf_op3_GEMM_sequence.bin",
+          "id": "sequence"
+        }
+      ],
+      "name": "op3_GEMM"
+    },
+    {
+      "PDIs": [
+        {
+          "PDI_file": "/home/micas/iron-stream-dse/experiments/sw_seq/iron_s2048_e512_h2048/swiglu_prefill_s2048_e512_h2048_fused.mlir.d/empty_1.pdi",
+          "id": 1
+        },
+        {
+          "PDI_file": "/home/micas/iron-stream-dse/experiments/sw_seq/iron_s2048_e512_h2048/swiglu_prefill_s2048_e512_h2048_fused.mlir.d/empty_0.pdi",
+          "id": 2
+        },
+        {
+          "PDI_file": "/home/micas/iron-stream-dse/experiments/sw_seq/iron_s2048_e512_h2048/swiglu_prefill_s2048_e512_h2048_fused.mlir.d/op0_GEMM.pdi",
+          "id": 3
+        },
+        {
+          "PDI_file": "/home/micas/iron-stream-dse/experiments/sw_seq/iron_s2048_e512_h2048/swiglu_prefill_s2048_e512_h2048_fused.mlir.d/op1_SiLU.pdi",
+          "id": 4
+        },
+        {
+          "PDI_file": "/home/micas/iron-stream-dse/experiments/sw_seq/iron_s2048_e512_h2048/swiglu_prefill_s2048_e512_h2048_fused.mlir.d/op2_ElementwiseMul.pdi",
+          "id": 5
+        },
+        {
+          "PDI_file": "/home/micas/iron-stream-dse/experiments/sw_seq/iron_s2048_e512_h2048/swiglu_prefill_s2048_e512_h2048_fused.mlir.d/op3_GEMM.pdi",
+          "id": 6
+        },
+        {
+          "PDI_file": "/home/micas/iron-stream-dse/experiments/sw_seq/iron_s2048_e512_h2048/swiglu_prefill_s2048_e512_h2048_fused.mlir.d/main.pdi",
+          "id": 7
+        }
+      ],
+      "arguments": [
+        {
+          "name": "arg_0",
+          "offset": "0x0",
+          "type": "char *"
+        },
+        {
+          "name": "arg_1",
+          "offset": "0x8",
+          "type": "char *"
+        },
+        {
+          "name": "arg_2",
+          "offset": "0x10",
+          "type": "char *"
+        }
+      ],
+      "instance": [
+        {
+          "TXN_ctrl_code_file": "/home/micas/iron-stream-dse/experiments/sw_seq/iron_s2048_e512_h2048/swiglu_prefill_s2048_e512_h2048_fused.mlir.d/npu_insts_full_elf_main_sequence.bin",
+          "id": "sequence"
+        }
+      ],
+      "name": "main"
+    }
+  ]
+}

@@ -1,0 +1,2 @@
+00000000 T eltwise_mul_bf16_scalar
+00000000 T eltwise_mul_bf16_vector

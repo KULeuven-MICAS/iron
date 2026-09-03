@@ -1,0 +1,699 @@
+module {
+  aie.device(npu2) {
+    %shim_noc_tile_0_0 = aie.tile(0, 0)
+    %shim_noc_tile_1_0 = aie.tile(1, 0)
+    %shim_noc_tile_2_0 = aie.tile(2, 0)
+    %shim_noc_tile_3_0 = aie.tile(3, 0)
+    %mem_tile_0_1 = aie.tile(0, 1)
+    %mem_tile_1_1 = aie.tile(1, 1)
+    %mem_tile_2_1 = aie.tile(2, 1)
+    %mem_tile_3_1 = aie.tile(3, 1)
+    %tile_0_2 = aie.tile(0, 2)
+    %tile_0_3 = aie.tile(0, 3)
+    %tile_0_4 = aie.tile(0, 4)
+    %tile_0_5 = aie.tile(0, 5)
+    %tile_1_2 = aie.tile(1, 2)
+    %tile_1_3 = aie.tile(1, 3)
+    %tile_1_4 = aie.tile(1, 4)
+    %tile_1_5 = aie.tile(1, 5)
+    %tile_2_2 = aie.tile(2, 2)
+    %tile_2_3 = aie.tile(2, 3)
+    %tile_2_4 = aie.tile(2, 4)
+    %tile_2_5 = aie.tile(2, 5)
+    %tile_3_2 = aie.tile(3, 2)
+    %tile_3_3 = aie.tile(3, 3)
+    %tile_3_4 = aie.tile(3, 4)
+    %tile_3_5 = aie.tile(3, 5)
+    aie.runtime_sequence(%arg0: memref<256x2048xbf16>, %arg1: memref<2048x512xbf16>, %arg2: memref<256x512xbf16>) {
+      aie.trace.host_config {buffer_size = 65536 : i32}
+      aie.trace.start_config @trace_core_0
+      aie.trace.start_config @trace_core_1
+      %0 = aiex.dma_configure_task_for @of_0_mem_0 {
+        aie.dma_bd(%arg0 : memref<256x2048xbf16> offset = 0 len = 131072 sizes = [2, 32, 64, 64] strides = [0, 64, 2048, 1])
+        aie.end
+      } {issue_token = true, iteration_t = 0 : index, repeat_count = 1 : i32}
+      aiex.dma_start_task(%0)
+      %1 = aiex.dma_configure_task_for @of_0_mem_1 {
+        aie.dma_bd(%arg0 : memref<256x2048xbf16> offset = 131072 len = 131072 sizes = [2, 32, 64, 64] strides = [0, 64, 2048, 1])
+        aie.end
+      } {issue_token = true, iteration_t = 0 : index, repeat_count = 1 : i32}
+      aiex.dma_start_task(%1)
+      %2 = aiex.dma_configure_task_for @of_0_mem_2 {
+        aie.dma_bd(%arg0 : memref<256x2048xbf16> offset = 262144 len = 131072 sizes = [2, 32, 64, 64] strides = [0, 64, 2048, 1])
+        aie.end
+      } {issue_token = true, iteration_t = 0 : index, repeat_count = 1 : i32}
+      aiex.dma_start_task(%2)
+      %3 = aiex.dma_configure_task_for @of_0_mem_3 {
+        aie.dma_bd(%arg0 : memref<256x2048xbf16> offset = 393216 len = 131072 sizes = [2, 32, 64, 64] strides = [0, 64, 2048, 1])
+        aie.end
+      } {issue_token = true, iteration_t = 0 : index, repeat_count = 1 : i32}
+      aiex.dma_start_task(%3)
+      %4 = aiex.dma_configure_task_for @of_1_mem_0 {
+        aie.dma_bd(%arg1 : memref<2048x512xbf16> offset = 0 len = 16384 sizes = [32, 4, 64, 64] strides = [32768, 64, 512, 1])
+        aie.end
+      } {issue_token = true, iteration_t = 0 : index, repeat_count = 31 : i32}
+      aiex.dma_start_task(%4)
+      %5 = aiex.dma_configure_task_for @of_1_mem_1 {
+        aie.dma_bd(%arg1 : memref<2048x512xbf16> offset = 0 len = 16384 sizes = [32, 4, 64, 64] strides = [32768, 64, 512, 1])
+        aie.end
+      } {issue_token = true, iteration_t = 0 : index, repeat_count = 31 : i32}
+      aiex.dma_start_task(%5)
+      %6 = aiex.dma_configure_task_for @of_1_mem_2 {
+        aie.dma_bd(%arg1 : memref<2048x512xbf16> offset = 0 len = 16384 sizes = [32, 4, 64, 64] strides = [32768, 64, 512, 1])
+        aie.end
+      } {issue_token = true, iteration_t = 0 : index, repeat_count = 31 : i32}
+      aiex.dma_start_task(%6)
+      %7 = aiex.dma_configure_task_for @of_1_mem_3 {
+        aie.dma_bd(%arg1 : memref<2048x512xbf16> offset = 0 len = 16384 sizes = [32, 4, 64, 64] strides = [32768, 64, 512, 1])
+        aie.end
+      } {issue_token = true, iteration_t = 0 : index, repeat_count = 31 : i32}
+      aiex.dma_start_task(%7)
+      %8 = aiex.dma_configure_task_for @of_5_mem_0 {
+        aie.dma_bd(%arg2 : memref<256x512xbf16> offset = 0 len = 32768 sizes = [1, 8, 64, 64] strides = [0, 64, 512, 1])
+        aie.end
+      } {issue_token = true, iteration_t = 0 : index}
+      aiex.dma_start_task(%8)
+      %9 = aiex.dma_configure_task_for @of_5_mem_1 {
+        aie.dma_bd(%arg2 : memref<256x512xbf16> offset = 32768 len = 32768 sizes = [1, 8, 64, 64] strides = [0, 64, 512, 1])
+        aie.end
+      } {issue_token = true, iteration_t = 0 : index}
+      aiex.dma_start_task(%9)
+      %10 = aiex.dma_configure_task_for @of_5_mem_2 {
+        aie.dma_bd(%arg2 : memref<256x512xbf16> offset = 65536 len = 32768 sizes = [1, 8, 64, 64] strides = [0, 64, 512, 1])
+        aie.end
+      } {issue_token = true, iteration_t = 0 : index}
+      aiex.dma_start_task(%10)
+      %11 = aiex.dma_configure_task_for @of_5_mem_3 {
+        aie.dma_bd(%arg2 : memref<256x512xbf16> offset = 98304 len = 32768 sizes = [1, 8, 64, 64] strides = [0, 64, 512, 1])
+        aie.end
+      } {issue_token = true, iteration_t = 0 : index}
+      aiex.dma_start_task(%11)
+      %12 = aiex.dma_configure_task_for @of_1_mem_0 {
+        aie.dma_bd(%arg1 : memref<2048x512xbf16> offset = 256 len = 16384 sizes = [32, 4, 64, 64] strides = [32768, 64, 512, 1])
+        aie.end
+      } {issue_token = true, iteration_t = 512 : index, repeat_count = 31 : i32}
+      aiex.dma_start_task(%12)
+      %13 = aiex.dma_configure_task_for @of_1_mem_1 {
+        aie.dma_bd(%arg1 : memref<2048x512xbf16> offset = 256 len = 16384 sizes = [32, 4, 64, 64] strides = [32768, 64, 512, 1])
+        aie.end
+      } {issue_token = true, iteration_t = 512 : index, repeat_count = 31 : i32}
+      aiex.dma_start_task(%13)
+      %14 = aiex.dma_configure_task_for @of_1_mem_2 {
+        aie.dma_bd(%arg1 : memref<2048x512xbf16> offset = 256 len = 16384 sizes = [32, 4, 64, 64] strides = [32768, 64, 512, 1])
+        aie.end
+      } {issue_token = true, iteration_t = 512 : index, repeat_count = 31 : i32}
+      aiex.dma_start_task(%14)
+      %15 = aiex.dma_configure_task_for @of_1_mem_3 {
+        aie.dma_bd(%arg1 : memref<2048x512xbf16> offset = 256 len = 16384 sizes = [32, 4, 64, 64] strides = [32768, 64, 512, 1])
+        aie.end
+      } {issue_token = true, iteration_t = 512 : index, repeat_count = 31 : i32}
+      aiex.dma_start_task(%15)
+      aiex.dma_await_task(%0)
+      aiex.dma_await_task(%1)
+      aiex.dma_await_task(%2)
+      aiex.dma_await_task(%3)
+      aiex.dma_await_task(%4)
+      aiex.dma_await_task(%12)
+      aiex.dma_await_task(%5)
+      aiex.dma_await_task(%13)
+      aiex.dma_await_task(%6)
+      aiex.dma_await_task(%14)
+      aiex.dma_await_task(%7)
+      aiex.dma_await_task(%15)
+      aiex.dma_await_task(%8)
+      aiex.dma_await_task(%9)
+      aiex.dma_await_task(%10)
+      aiex.dma_await_task(%11)
+    }
+    %core_0_2 = aie.core(%tile_0_2) {
+      %c0 = arith.constant 0 : index
+      %c1 = arith.constant 1 : index
+      %c4294967295 = arith.constant 4294967295 : index
+      scf.for %arg0 = %c0 to %c4294967295 step %c1 {
+        %c0_0 = arith.constant 0 : index
+        %c1_1 = arith.constant 1 : index
+        %c1_2 = arith.constant 1 : index
+        scf.for %arg1 = %c0_0 to %c1_2 step %c1_1 {
+          %c2 = arith.constant 2 : index
+          scf.for %arg2 = %c0_0 to %c2 step %c1_1 {
+            %0 = aie.objectfifo.acquire @of_4_join_0_0(Produce, 1) : !aie.objectfifosubview<memref<64x64xbf16>>
+            %1 = aie.objectfifo.subview.access %0[0] : !aie.objectfifosubview<memref<64x64xbf16>> -> memref<64x64xbf16>
+            func.call @op3_zero_bf16_64_64_64(%1) : (memref<64x64xbf16>) -> ()
+            %c32 = arith.constant 32 : index
+            scf.for %arg3 = %c0_0 to %c32 step %c1_1 {
+              %2 = aie.objectfifo.acquire @of_3_distribute_0_0(Consume, 1) : !aie.objectfifosubview<memref<64x64xbf16>>
+              %3 = aie.objectfifo.subview.access %2[0] : !aie.objectfifosubview<memref<64x64xbf16>> -> memref<64x64xbf16>
+              %4 = aie.objectfifo.acquire @of_2_broadcast_0_0(Consume, 1) : !aie.objectfifosubview<memref<64x64xbf16>>
+              %5 = aie.objectfifo.subview.access %4[0] : !aie.objectfifosubview<memref<64x64xbf16>> -> memref<64x64xbf16>
+              func.call @op3_matmul_bf16_bf16_64_64_64(%5, %3, %1) : (memref<64x64xbf16>, memref<64x64xbf16>, memref<64x64xbf16>) -> ()
+              aie.objectfifo.release @of_2_broadcast_0_0(Consume, 1)
+              aie.objectfifo.release @of_3_distribute_0_0(Consume, 1)
+            }
+            aie.objectfifo.release @of_4_join_0_0(Produce, 1)
+          }
+        }
+      }
+      aie.end
+    } {link_with = "op3_mm_64_64_64.o"}
+    %core_0_3 = aie.core(%tile_0_3) {
+      %c0 = arith.constant 0 : index
+      %c1 = arith.constant 1 : index
+      %c4294967295 = arith.constant 4294967295 : index
+      scf.for %arg0 = %c0 to %c4294967295 step %c1 {
+        %c0_0 = arith.constant 0 : index
+        %c1_1 = arith.constant 1 : index
+        %c1_2 = arith.constant 1 : index
+        scf.for %arg1 = %c0_0 to %c1_2 step %c1_1 {
+          %c2 = arith.constant 2 : index
+          scf.for %arg2 = %c0_0 to %c2 step %c1_1 {
+            %0 = aie.objectfifo.acquire @of_4_join_1_0(Produce, 1) : !aie.objectfifosubview<memref<64x64xbf16>>
+            %1 = aie.objectfifo.subview.access %0[0] : !aie.objectfifosubview<memref<64x64xbf16>> -> memref<64x64xbf16>
+            func.call @op3_zero_bf16_64_64_64(%1) : (memref<64x64xbf16>) -> ()
+            %c32 = arith.constant 32 : index
+            scf.for %arg3 = %c0_0 to %c32 step %c1_1 {
+              %2 = aie.objectfifo.acquire @of_3_distribute_1_0(Consume, 1) : !aie.objectfifosubview<memref<64x64xbf16>>
+              %3 = aie.objectfifo.subview.access %2[0] : !aie.objectfifosubview<memref<64x64xbf16>> -> memref<64x64xbf16>
+              %4 = aie.objectfifo.acquire @of_2_broadcast_1_0(Consume, 1) : !aie.objectfifosubview<memref<64x64xbf16>>
+              %5 = aie.objectfifo.subview.access %4[0] : !aie.objectfifosubview<memref<64x64xbf16>> -> memref<64x64xbf16>
+              func.call @op3_matmul_bf16_bf16_64_64_64(%5, %3, %1) : (memref<64x64xbf16>, memref<64x64xbf16>, memref<64x64xbf16>) -> ()
+              aie.objectfifo.release @of_2_broadcast_1_0(Consume, 1)
+              aie.objectfifo.release @of_3_distribute_1_0(Consume, 1)
+            }
+            aie.objectfifo.release @of_4_join_1_0(Produce, 1)
+          }
+        }
+      }
+      aie.end
+    } {link_with = "op3_mm_64_64_64.o"}
+    %core_0_4 = aie.core(%tile_0_4) {
+      %c0 = arith.constant 0 : index
+      %c1 = arith.constant 1 : index
+      %c4294967295 = arith.constant 4294967295 : index
+      scf.for %arg0 = %c0 to %c4294967295 step %c1 {
+        %c0_0 = arith.constant 0 : index
+        %c1_1 = arith.constant 1 : index
+        %c1_2 = arith.constant 1 : index
+        scf.for %arg1 = %c0_0 to %c1_2 step %c1_1 {
+          %c2 = arith.constant 2 : index
+          scf.for %arg2 = %c0_0 to %c2 step %c1_1 {
+            %0 = aie.objectfifo.acquire @of_4_join_2_0(Produce, 1) : !aie.objectfifosubview<memref<64x64xbf16>>
+            %1 = aie.objectfifo.subview.access %0[0] : !aie.objectfifosubview<memref<64x64xbf16>> -> memref<64x64xbf16>
+            func.call @op3_zero_bf16_64_64_64(%1) : (memref<64x64xbf16>) -> ()
+            %c32 = arith.constant 32 : index
+            scf.for %arg3 = %c0_0 to %c32 step %c1_1 {
+              %2 = aie.objectfifo.acquire @of_3_distribute_2_0(Consume, 1) : !aie.objectfifosubview<memref<64x64xbf16>>
+              %3 = aie.objectfifo.subview.access %2[0] : !aie.objectfifosubview<memref<64x64xbf16>> -> memref<64x64xbf16>
+              %4 = aie.objectfifo.acquire @of_2_broadcast_2_0(Consume, 1) : !aie.objectfifosubview<memref<64x64xbf16>>
+              %5 = aie.objectfifo.subview.access %4[0] : !aie.objectfifosubview<memref<64x64xbf16>> -> memref<64x64xbf16>
+              func.call @op3_matmul_bf16_bf16_64_64_64(%5, %3, %1) : (memref<64x64xbf16>, memref<64x64xbf16>, memref<64x64xbf16>) -> ()
+              aie.objectfifo.release @of_2_broadcast_2_0(Consume, 1)
+              aie.objectfifo.release @of_3_distribute_2_0(Consume, 1)
+            }
+            aie.objectfifo.release @of_4_join_2_0(Produce, 1)
+          }
+        }
+      }
+      aie.end
+    } {link_with = "op3_mm_64_64_64.o"}
+    %core_0_5 = aie.core(%tile_0_5) {
+      %c0 = arith.constant 0 : index
+      %c1 = arith.constant 1 : index
+      %c4294967295 = arith.constant 4294967295 : index
+      scf.for %arg0 = %c0 to %c4294967295 step %c1 {
+        %c0_0 = arith.constant 0 : index
+        %c1_1 = arith.constant 1 : index
+        %c1_2 = arith.constant 1 : index
+        scf.for %arg1 = %c0_0 to %c1_2 step %c1_1 {
+          %c2 = arith.constant 2 : index
+          scf.for %arg2 = %c0_0 to %c2 step %c1_1 {
+            %0 = aie.objectfifo.acquire @of_4_join_3_0(Produce, 1) : !aie.objectfifosubview<memref<64x64xbf16>>
+            %1 = aie.objectfifo.subview.access %0[0] : !aie.objectfifosubview<memref<64x64xbf16>> -> memref<64x64xbf16>
+            func.call @op3_zero_bf16_64_64_64(%1) : (memref<64x64xbf16>) -> ()
+            %c32 = arith.constant 32 : index
+            scf.for %arg3 = %c0_0 to %c32 step %c1_1 {
+              %2 = aie.objectfifo.acquire @of_3_distribute_3_0(Consume, 1) : !aie.objectfifosubview<memref<64x64xbf16>>
+              %3 = aie.objectfifo.subview.access %2[0] : !aie.objectfifosubview<memref<64x64xbf16>> -> memref<64x64xbf16>
+              %4 = aie.objectfifo.acquire @of_2_broadcast_3_0(Consume, 1) : !aie.objectfifosubview<memref<64x64xbf16>>
+              %5 = aie.objectfifo.subview.access %4[0] : !aie.objectfifosubview<memref<64x64xbf16>> -> memref<64x64xbf16>
+              func.call @op3_matmul_bf16_bf16_64_64_64(%5, %3, %1) : (memref<64x64xbf16>, memref<64x64xbf16>, memref<64x64xbf16>) -> ()
+              aie.objectfifo.release @of_2_broadcast_3_0(Consume, 1)
+              aie.objectfifo.release @of_3_distribute_3_0(Consume, 1)
+            }
+            aie.objectfifo.release @of_4_join_3_0(Produce, 1)
+          }
+        }
+      }
+      aie.end
+    } {link_with = "op3_mm_64_64_64.o"}
+    %core_1_2 = aie.core(%tile_1_2) {
+      %c0 = arith.constant 0 : index
+      %c1 = arith.constant 1 : index
+      %c4294967295 = arith.constant 4294967295 : index
+      scf.for %arg0 = %c0 to %c4294967295 step %c1 {
+        %c0_0 = arith.constant 0 : index
+        %c1_1 = arith.constant 1 : index
+        %c1_2 = arith.constant 1 : index
+        scf.for %arg1 = %c0_0 to %c1_2 step %c1_1 {
+          %c2 = arith.constant 2 : index
+          scf.for %arg2 = %c0_0 to %c2 step %c1_1 {
+            %0 = aie.objectfifo.acquire @of_4_join_0_1(Produce, 1) : !aie.objectfifosubview<memref<64x64xbf16>>
+            %1 = aie.objectfifo.subview.access %0[0] : !aie.objectfifosubview<memref<64x64xbf16>> -> memref<64x64xbf16>
+            func.call @op3_zero_bf16_64_64_64(%1) : (memref<64x64xbf16>) -> ()
+            %c32 = arith.constant 32 : index
+            scf.for %arg3 = %c0_0 to %c32 step %c1_1 {
+              %2 = aie.objectfifo.acquire @of_3_distribute_0_1(Consume, 1) : !aie.objectfifosubview<memref<64x64xbf16>>
+              %3 = aie.objectfifo.subview.access %2[0] : !aie.objectfifosubview<memref<64x64xbf16>> -> memref<64x64xbf16>
+              %4 = aie.objectfifo.acquire @of_2_broadcast_0_0(Consume, 1) : !aie.objectfifosubview<memref<64x64xbf16>>
+              %5 = aie.objectfifo.subview.access %4[0] : !aie.objectfifosubview<memref<64x64xbf16>> -> memref<64x64xbf16>
+              func.call @op3_matmul_bf16_bf16_64_64_64(%5, %3, %1) : (memref<64x64xbf16>, memref<64x64xbf16>, memref<64x64xbf16>) -> ()
+              aie.objectfifo.release @of_2_broadcast_0_0(Consume, 1)
+              aie.objectfifo.release @of_3_distribute_0_1(Consume, 1)
+            }
+            aie.objectfifo.release @of_4_join_0_1(Produce, 1)
+          }
+        }
+      }
+      aie.end
+    } {link_with = "op3_mm_64_64_64.o"}
+    %core_1_3 = aie.core(%tile_1_3) {
+      %c0 = arith.constant 0 : index
+      %c1 = arith.constant 1 : index
+      %c4294967295 = arith.constant 4294967295 : index
+      scf.for %arg0 = %c0 to %c4294967295 step %c1 {
+        %c0_0 = arith.constant 0 : index
+        %c1_1 = arith.constant 1 : index
+        %c1_2 = arith.constant 1 : index
+        scf.for %arg1 = %c0_0 to %c1_2 step %c1_1 {
+          %c2 = arith.constant 2 : index
+          scf.for %arg2 = %c0_0 to %c2 step %c1_1 {
+            %0 = aie.objectfifo.acquire @of_4_join_1_1(Produce, 1) : !aie.objectfifosubview<memref<64x64xbf16>>
+            %1 = aie.objectfifo.subview.access %0[0] : !aie.objectfifosubview<memref<64x64xbf16>> -> memref<64x64xbf16>
+            func.call @op3_zero_bf16_64_64_64(%1) : (memref<64x64xbf16>) -> ()
+            %c32 = arith.constant 32 : index
+            scf.for %arg3 = %c0_0 to %c32 step %c1_1 {
+              %2 = aie.objectfifo.acquire @of_3_distribute_1_1(Consume, 1) : !aie.objectfifosubview<memref<64x64xbf16>>
+              %3 = aie.objectfifo.subview.access %2[0] : !aie.objectfifosubview<memref<64x64xbf16>> -> memref<64x64xbf16>
+              %4 = aie.objectfifo.acquire @of_2_broadcast_1_0(Consume, 1) : !aie.objectfifosubview<memref<64x64xbf16>>
+              %5 = aie.objectfifo.subview.access %4[0] : !aie.objectfifosubview<memref<64x64xbf16>> -> memref<64x64xbf16>
+              func.call @op3_matmul_bf16_bf16_64_64_64(%5, %3, %1) : (memref<64x64xbf16>, memref<64x64xbf16>, memref<64x64xbf16>) -> ()
+              aie.objectfifo.release @of_2_broadcast_1_0(Consume, 1)
+              aie.objectfifo.release @of_3_distribute_1_1(Consume, 1)
+            }
+            aie.objectfifo.release @of_4_join_1_1(Produce, 1)
+          }
+        }
+      }
+      aie.end
+    } {link_with = "op3_mm_64_64_64.o"}
+    %core_1_4 = aie.core(%tile_1_4) {
+      %c0 = arith.constant 0 : index
+      %c1 = arith.constant 1 : index
+      %c4294967295 = arith.constant 4294967295 : index
+      scf.for %arg0 = %c0 to %c4294967295 step %c1 {
+        %c0_0 = arith.constant 0 : index
+        %c1_1 = arith.constant 1 : index
+        %c1_2 = arith.constant 1 : index
+        scf.for %arg1 = %c0_0 to %c1_2 step %c1_1 {
+          %c2 = arith.constant 2 : index
+          scf.for %arg2 = %c0_0 to %c2 step %c1_1 {
+            %0 = aie.objectfifo.acquire @of_4_join_2_1(Produce, 1) : !aie.objectfifosubview<memref<64x64xbf16>>
+            %1 = aie.objectfifo.subview.access %0[0] : !aie.objectfifosubview<memref<64x64xbf16>> -> memref<64x64xbf16>
+            func.call @op3_zero_bf16_64_64_64(%1) : (memref<64x64xbf16>) -> ()
+            %c32 = arith.constant 32 : index
+            scf.for %arg3 = %c0_0 to %c32 step %c1_1 {
+              %2 = aie.objectfifo.acquire @of_3_distribute_2_1(Consume, 1) : !aie.objectfifosubview<memref<64x64xbf16>>
+              %3 = aie.objectfifo.subview.access %2[0] : !aie.objectfifosubview<memref<64x64xbf16>> -> memref<64x64xbf16>
+              %4 = aie.objectfifo.acquire @of_2_broadcast_2_0(Consume, 1) : !aie.objectfifosubview<memref<64x64xbf16>>
+              %5 = aie.objectfifo.subview.access %4[0] : !aie.objectfifosubview<memref<64x64xbf16>> -> memref<64x64xbf16>
+              func.call @op3_matmul_bf16_bf16_64_64_64(%5, %3, %1) : (memref<64x64xbf16>, memref<64x64xbf16>, memref<64x64xbf16>) -> ()
+              aie.objectfifo.release @of_2_broadcast_2_0(Consume, 1)
+              aie.objectfifo.release @of_3_distribute_2_1(Consume, 1)
+            }
+            aie.objectfifo.release @of_4_join_2_1(Produce, 1)
+          }
+        }
+      }
+      aie.end
+    } {link_with = "op3_mm_64_64_64.o"}
+    %core_1_5 = aie.core(%tile_1_5) {
+      %c0 = arith.constant 0 : index
+      %c1 = arith.constant 1 : index
+      %c4294967295 = arith.constant 4294967295 : index
+      scf.for %arg0 = %c0 to %c4294967295 step %c1 {
+        %c0_0 = arith.constant 0 : index
+        %c1_1 = arith.constant 1 : index
+        %c1_2 = arith.constant 1 : index
+        scf.for %arg1 = %c0_0 to %c1_2 step %c1_1 {
+          %c2 = arith.constant 2 : index
+          scf.for %arg2 = %c0_0 to %c2 step %c1_1 {
+            %0 = aie.objectfifo.acquire @of_4_join_3_1(Produce, 1) : !aie.objectfifosubview<memref<64x64xbf16>>
+            %1 = aie.objectfifo.subview.access %0[0] : !aie.objectfifosubview<memref<64x64xbf16>> -> memref<64x64xbf16>
+            func.call @op3_zero_bf16_64_64_64(%1) : (memref<64x64xbf16>) -> ()
+            %c32 = arith.constant 32 : index
+            scf.for %arg3 = %c0_0 to %c32 step %c1_1 {
+              %2 = aie.objectfifo.acquire @of_3_distribute_3_1(Consume, 1) : !aie.objectfifosubview<memref<64x64xbf16>>
+              %3 = aie.objectfifo.subview.access %2[0] : !aie.objectfifosubview<memref<64x64xbf16>> -> memref<64x64xbf16>
+              %4 = aie.objectfifo.acquire @of_2_broadcast_3_0(Consume, 1) : !aie.objectfifosubview<memref<64x64xbf16>>
+              %5 = aie.objectfifo.subview.access %4[0] : !aie.objectfifosubview<memref<64x64xbf16>> -> memref<64x64xbf16>
+              func.call @op3_matmul_bf16_bf16_64_64_64(%5, %3, %1) : (memref<64x64xbf16>, memref<64x64xbf16>, memref<64x64xbf16>) -> ()
+              aie.objectfifo.release @of_2_broadcast_3_0(Consume, 1)
+              aie.objectfifo.release @of_3_distribute_3_1(Consume, 1)
+            }
+            aie.objectfifo.release @of_4_join_3_1(Produce, 1)
+          }
+        }
+      }
+      aie.end
+    } {link_with = "op3_mm_64_64_64.o"}
+    %core_2_2 = aie.core(%tile_2_2) {
+      %c0 = arith.constant 0 : index
+      %c1 = arith.constant 1 : index
+      %c4294967295 = arith.constant 4294967295 : index
+      scf.for %arg0 = %c0 to %c4294967295 step %c1 {
+        %c0_0 = arith.constant 0 : index
+        %c1_1 = arith.constant 1 : index
+        %c1_2 = arith.constant 1 : index
+        scf.for %arg1 = %c0_0 to %c1_2 step %c1_1 {
+          %c2 = arith.constant 2 : index
+          scf.for %arg2 = %c0_0 to %c2 step %c1_1 {
+            %0 = aie.objectfifo.acquire @of_4_join_0_2(Produce, 1) : !aie.objectfifosubview<memref<64x64xbf16>>
+            %1 = aie.objectfifo.subview.access %0[0] : !aie.objectfifosubview<memref<64x64xbf16>> -> memref<64x64xbf16>
+            func.call @op3_zero_bf16_64_64_64(%1) : (memref<64x64xbf16>) -> ()
+            %c32 = arith.constant 32 : index
+            scf.for %arg3 = %c0_0 to %c32 step %c1_1 {
+              %2 = aie.objectfifo.acquire @of_3_distribute_0_2(Consume, 1) : !aie.objectfifosubview<memref<64x64xbf16>>
+              %3 = aie.objectfifo.subview.access %2[0] : !aie.objectfifosubview<memref<64x64xbf16>> -> memref<64x64xbf16>
+              %4 = aie.objectfifo.acquire @of_2_broadcast_0_0(Consume, 1) : !aie.objectfifosubview<memref<64x64xbf16>>
+              %5 = aie.objectfifo.subview.access %4[0] : !aie.objectfifosubview<memref<64x64xbf16>> -> memref<64x64xbf16>
+              func.call @op3_matmul_bf16_bf16_64_64_64(%5, %3, %1) : (memref<64x64xbf16>, memref<64x64xbf16>, memref<64x64xbf16>) -> ()
+              aie.objectfifo.release @of_2_broadcast_0_0(Consume, 1)
+              aie.objectfifo.release @of_3_distribute_0_2(Consume, 1)
+            }
+            aie.objectfifo.release @of_4_join_0_2(Produce, 1)
+          }
+        }
+      }
+      aie.end
+    } {link_with = "op3_mm_64_64_64.o"}
+    %core_2_3 = aie.core(%tile_2_3) {
+      %c0 = arith.constant 0 : index
+      %c1 = arith.constant 1 : index
+      %c4294967295 = arith.constant 4294967295 : index
+      scf.for %arg0 = %c0 to %c4294967295 step %c1 {
+        %c0_0 = arith.constant 0 : index
+        %c1_1 = arith.constant 1 : index
+        %c1_2 = arith.constant 1 : index
+        scf.for %arg1 = %c0_0 to %c1_2 step %c1_1 {
+          %c2 = arith.constant 2 : index
+          scf.for %arg2 = %c0_0 to %c2 step %c1_1 {
+            %0 = aie.objectfifo.acquire @of_4_join_1_2(Produce, 1) : !aie.objectfifosubview<memref<64x64xbf16>>
+            %1 = aie.objectfifo.subview.access %0[0] : !aie.objectfifosubview<memref<64x64xbf16>> -> memref<64x64xbf16>
+            func.call @op3_zero_bf16_64_64_64(%1) : (memref<64x64xbf16>) -> ()
+            %c32 = arith.constant 32 : index
+            scf.for %arg3 = %c0_0 to %c32 step %c1_1 {
+              %2 = aie.objectfifo.acquire @of_3_distribute_1_2(Consume, 1) : !aie.objectfifosubview<memref<64x64xbf16>>
+              %3 = aie.objectfifo.subview.access %2[0] : !aie.objectfifosubview<memref<64x64xbf16>> -> memref<64x64xbf16>
+              %4 = aie.objectfifo.acquire @of_2_broadcast_1_0(Consume, 1) : !aie.objectfifosubview<memref<64x64xbf16>>
+              %5 = aie.objectfifo.subview.access %4[0] : !aie.objectfifosubview<memref<64x64xbf16>> -> memref<64x64xbf16>
+              func.call @op3_matmul_bf16_bf16_64_64_64(%5, %3, %1) : (memref<64x64xbf16>, memref<64x64xbf16>, memref<64x64xbf16>) -> ()
+              aie.objectfifo.release @of_2_broadcast_1_0(Consume, 1)
+              aie.objectfifo.release @of_3_distribute_1_2(Consume, 1)
+            }
+            aie.objectfifo.release @of_4_join_1_2(Produce, 1)
+          }
+        }
+      }
+      aie.end
+    } {link_with = "op3_mm_64_64_64.o"}
+    %core_2_4 = aie.core(%tile_2_4) {
+      %c0 = arith.constant 0 : index
+      %c1 = arith.constant 1 : index
+      %c4294967295 = arith.constant 4294967295 : index
+      scf.for %arg0 = %c0 to %c4294967295 step %c1 {
+        %c0_0 = arith.constant 0 : index
+        %c1_1 = arith.constant 1 : index
+        %c1_2 = arith.constant 1 : index
+        scf.for %arg1 = %c0_0 to %c1_2 step %c1_1 {
+          %c2 = arith.constant 2 : index
+          scf.for %arg2 = %c0_0 to %c2 step %c1_1 {
+            %0 = aie.objectfifo.acquire @of_4_join_2_2(Produce, 1) : !aie.objectfifosubview<memref<64x64xbf16>>
+            %1 = aie.objectfifo.subview.access %0[0] : !aie.objectfifosubview<memref<64x64xbf16>> -> memref<64x64xbf16>
+            func.call @op3_zero_bf16_64_64_64(%1) : (memref<64x64xbf16>) -> ()
+            %c32 = arith.constant 32 : index
+            scf.for %arg3 = %c0_0 to %c32 step %c1_1 {
+              %2 = aie.objectfifo.acquire @of_3_distribute_2_2(Consume, 1) : !aie.objectfifosubview<memref<64x64xbf16>>
+              %3 = aie.objectfifo.subview.access %2[0] : !aie.objectfifosubview<memref<64x64xbf16>> -> memref<64x64xbf16>
+              %4 = aie.objectfifo.acquire @of_2_broadcast_2_0(Consume, 1) : !aie.objectfifosubview<memref<64x64xbf16>>
+              %5 = aie.objectfifo.subview.access %4[0] : !aie.objectfifosubview<memref<64x64xbf16>> -> memref<64x64xbf16>
+              func.call @op3_matmul_bf16_bf16_64_64_64(%5, %3, %1) : (memref<64x64xbf16>, memref<64x64xbf16>, memref<64x64xbf16>) -> ()
+              aie.objectfifo.release @of_2_broadcast_2_0(Consume, 1)
+              aie.objectfifo.release @of_3_distribute_2_2(Consume, 1)
+            }
+            aie.objectfifo.release @of_4_join_2_2(Produce, 1)
+          }
+        }
+      }
+      aie.end
+    } {link_with = "op3_mm_64_64_64.o"}
+    %core_2_5 = aie.core(%tile_2_5) {
+      %c0 = arith.constant 0 : index
+      %c1 = arith.constant 1 : index
+      %c4294967295 = arith.constant 4294967295 : index
+      scf.for %arg0 = %c0 to %c4294967295 step %c1 {
+        %c0_0 = arith.constant 0 : index
+        %c1_1 = arith.constant 1 : index
+        %c1_2 = arith.constant 1 : index
+        scf.for %arg1 = %c0_0 to %c1_2 step %c1_1 {
+          %c2 = arith.constant 2 : index
+          scf.for %arg2 = %c0_0 to %c2 step %c1_1 {
+            %0 = aie.objectfifo.acquire @of_4_join_3_2(Produce, 1) : !aie.objectfifosubview<memref<64x64xbf16>>
+            %1 = aie.objectfifo.subview.access %0[0] : !aie.objectfifosubview<memref<64x64xbf16>> -> memref<64x64xbf16>
+            func.call @op3_zero_bf16_64_64_64(%1) : (memref<64x64xbf16>) -> ()
+            %c32 = arith.constant 32 : index
+            scf.for %arg3 = %c0_0 to %c32 step %c1_1 {
+              %2 = aie.objectfifo.acquire @of_3_distribute_3_2(Consume, 1) : !aie.objectfifosubview<memref<64x64xbf16>>
+              %3 = aie.objectfifo.subview.access %2[0] : !aie.objectfifosubview<memref<64x64xbf16>> -> memref<64x64xbf16>
+              %4 = aie.objectfifo.acquire @of_2_broadcast_3_0(Consume, 1) : !aie.objectfifosubview<memref<64x64xbf16>>
+              %5 = aie.objectfifo.subview.access %4[0] : !aie.objectfifosubview<memref<64x64xbf16>> -> memref<64x64xbf16>
+              func.call @op3_matmul_bf16_bf16_64_64_64(%5, %3, %1) : (memref<64x64xbf16>, memref<64x64xbf16>, memref<64x64xbf16>) -> ()
+              aie.objectfifo.release @of_2_broadcast_3_0(Consume, 1)
+              aie.objectfifo.release @of_3_distribute_3_2(Consume, 1)
+            }
+            aie.objectfifo.release @of_4_join_3_2(Produce, 1)
+          }
+        }
+      }
+      aie.end
+    } {link_with = "op3_mm_64_64_64.o"}
+    %core_3_2 = aie.core(%tile_3_2) {
+      %c0 = arith.constant 0 : index
+      %c1 = arith.constant 1 : index
+      %c4294967295 = arith.constant 4294967295 : index
+      scf.for %arg0 = %c0 to %c4294967295 step %c1 {
+        %c0_0 = arith.constant 0 : index
+        %c1_1 = arith.constant 1 : index
+        %c1_2 = arith.constant 1 : index
+        scf.for %arg1 = %c0_0 to %c1_2 step %c1_1 {
+          %c2 = arith.constant 2 : index
+          scf.for %arg2 = %c0_0 to %c2 step %c1_1 {
+            %0 = aie.objectfifo.acquire @of_4_join_0_3(Produce, 1) : !aie.objectfifosubview<memref<64x64xbf16>>
+            %1 = aie.objectfifo.subview.access %0[0] : !aie.objectfifosubview<memref<64x64xbf16>> -> memref<64x64xbf16>
+            func.call @op3_zero_bf16_64_64_64(%1) : (memref<64x64xbf16>) -> ()
+            %c32 = arith.constant 32 : index
+            scf.for %arg3 = %c0_0 to %c32 step %c1_1 {
+              %2 = aie.objectfifo.acquire @of_3_distribute_0_3(Consume, 1) : !aie.objectfifosubview<memref<64x64xbf16>>
+              %3 = aie.objectfifo.subview.access %2[0] : !aie.objectfifosubview<memref<64x64xbf16>> -> memref<64x64xbf16>
+              %4 = aie.objectfifo.acquire @of_2_broadcast_0_0(Consume, 1) : !aie.objectfifosubview<memref<64x64xbf16>>
+              %5 = aie.objectfifo.subview.access %4[0] : !aie.objectfifosubview<memref<64x64xbf16>> -> memref<64x64xbf16>
+              func.call @op3_matmul_bf16_bf16_64_64_64(%5, %3, %1) : (memref<64x64xbf16>, memref<64x64xbf16>, memref<64x64xbf16>) -> ()
+              aie.objectfifo.release @of_2_broadcast_0_0(Consume, 1)
+              aie.objectfifo.release @of_3_distribute_0_3(Consume, 1)
+            }
+            aie.objectfifo.release @of_4_join_0_3(Produce, 1)
+          }
+        }
+      }
+      aie.end
+    } {link_with = "op3_mm_64_64_64.o"}
+    %core_3_3 = aie.core(%tile_3_3) {
+      %c0 = arith.constant 0 : index
+      %c1 = arith.constant 1 : index
+      %c4294967295 = arith.constant 4294967295 : index
+      scf.for %arg0 = %c0 to %c4294967295 step %c1 {
+        %c0_0 = arith.constant 0 : index
+        %c1_1 = arith.constant 1 : index
+        %c1_2 = arith.constant 1 : index
+        scf.for %arg1 = %c0_0 to %c1_2 step %c1_1 {
+          %c2 = arith.constant 2 : index
+          scf.for %arg2 = %c0_0 to %c2 step %c1_1 {
+            %0 = aie.objectfifo.acquire @of_4_join_1_3(Produce, 1) : !aie.objectfifosubview<memref<64x64xbf16>>
+            %1 = aie.objectfifo.subview.access %0[0] : !aie.objectfifosubview<memref<64x64xbf16>> -> memref<64x64xbf16>
+            func.call @op3_zero_bf16_64_64_64(%1) : (memref<64x64xbf16>) -> ()
+            %c32 = arith.constant 32 : index
+            scf.for %arg3 = %c0_0 to %c32 step %c1_1 {
+              %2 = aie.objectfifo.acquire @of_3_distribute_1_3(Consume, 1) : !aie.objectfifosubview<memref<64x64xbf16>>
+              %3 = aie.objectfifo.subview.access %2[0] : !aie.objectfifosubview<memref<64x64xbf16>> -> memref<64x64xbf16>
+              %4 = aie.objectfifo.acquire @of_2_broadcast_1_0(Consume, 1) : !aie.objectfifosubview<memref<64x64xbf16>>
+              %5 = aie.objectfifo.subview.access %4[0] : !aie.objectfifosubview<memref<64x64xbf16>> -> memref<64x64xbf16>
+              func.call @op3_matmul_bf16_bf16_64_64_64(%5, %3, %1) : (memref<64x64xbf16>, memref<64x64xbf16>, memref<64x64xbf16>) -> ()
+              aie.objectfifo.release @of_2_broadcast_1_0(Consume, 1)
+              aie.objectfifo.release @of_3_distribute_1_3(Consume, 1)
+            }
+            aie.objectfifo.release @of_4_join_1_3(Produce, 1)
+          }
+        }
+      }
+      aie.end
+    } {link_with = "op3_mm_64_64_64.o"}
+    %core_3_4 = aie.core(%tile_3_4) {
+      %c0 = arith.constant 0 : index
+      %c1 = arith.constant 1 : index
+      %c4294967295 = arith.constant 4294967295 : index
+      scf.for %arg0 = %c0 to %c4294967295 step %c1 {
+        %c0_0 = arith.constant 0 : index
+        %c1_1 = arith.constant 1 : index
+        %c1_2 = arith.constant 1 : index
+        scf.for %arg1 = %c0_0 to %c1_2 step %c1_1 {
+          %c2 = arith.constant 2 : index
+          scf.for %arg2 = %c0_0 to %c2 step %c1_1 {
+            %0 = aie.objectfifo.acquire @of_4_join_2_3(Produce, 1) : !aie.objectfifosubview<memref<64x64xbf16>>
+            %1 = aie.objectfifo.subview.access %0[0] : !aie.objectfifosubview<memref<64x64xbf16>> -> memref<64x64xbf16>
+            func.call @op3_zero_bf16_64_64_64(%1) : (memref<64x64xbf16>) -> ()
+            %c32 = arith.constant 32 : index
+            scf.for %arg3 = %c0_0 to %c32 step %c1_1 {
+              %2 = aie.objectfifo.acquire @of_3_distribute_2_3(Consume, 1) : !aie.objectfifosubview<memref<64x64xbf16>>
+              %3 = aie.objectfifo.subview.access %2[0] : !aie.objectfifosubview<memref<64x64xbf16>> -> memref<64x64xbf16>
+              %4 = aie.objectfifo.acquire @of_2_broadcast_2_0(Consume, 1) : !aie.objectfifosubview<memref<64x64xbf16>>
+              %5 = aie.objectfifo.subview.access %4[0] : !aie.objectfifosubview<memref<64x64xbf16>> -> memref<64x64xbf16>
+              func.call @op3_matmul_bf16_bf16_64_64_64(%5, %3, %1) : (memref<64x64xbf16>, memref<64x64xbf16>, memref<64x64xbf16>) -> ()
+              aie.objectfifo.release @of_2_broadcast_2_0(Consume, 1)
+              aie.objectfifo.release @of_3_distribute_2_3(Consume, 1)
+            }
+            aie.objectfifo.release @of_4_join_2_3(Produce, 1)
+          }
+        }
+      }
+      aie.end
+    } {link_with = "op3_mm_64_64_64.o"}
+    %core_3_5 = aie.core(%tile_3_5) {
+      %c0 = arith.constant 0 : index
+      %c1 = arith.constant 1 : index
+      %c4294967295 = arith.constant 4294967295 : index
+      scf.for %arg0 = %c0 to %c4294967295 step %c1 {
+        %c0_0 = arith.constant 0 : index
+        %c1_1 = arith.constant 1 : index
+        %c1_2 = arith.constant 1 : index
+        scf.for %arg1 = %c0_0 to %c1_2 step %c1_1 {
+          %c2 = arith.constant 2 : index
+          scf.for %arg2 = %c0_0 to %c2 step %c1_1 {
+            %0 = aie.objectfifo.acquire @of_4_join_3_3(Produce, 1) : !aie.objectfifosubview<memref<64x64xbf16>>
+            %1 = aie.objectfifo.subview.access %0[0] : !aie.objectfifosubview<memref<64x64xbf16>> -> memref<64x64xbf16>
+            func.call @op3_zero_bf16_64_64_64(%1) : (memref<64x64xbf16>) -> ()
+            %c32 = arith.constant 32 : index
+            scf.for %arg3 = %c0_0 to %c32 step %c1_1 {
+              %2 = aie.objectfifo.acquire @of_3_distribute_3_3(Consume, 1) : !aie.objectfifosubview<memref<64x64xbf16>>
+              %3 = aie.objectfifo.subview.access %2[0] : !aie.objectfifosubview<memref<64x64xbf16>> -> memref<64x64xbf16>
+              %4 = aie.objectfifo.acquire @of_2_broadcast_3_0(Consume, 1) : !aie.objectfifosubview<memref<64x64xbf16>>
+              %5 = aie.objectfifo.subview.access %4[0] : !aie.objectfifosubview<memref<64x64xbf16>> -> memref<64x64xbf16>
+              func.call @op3_matmul_bf16_bf16_64_64_64(%5, %3, %1) : (memref<64x64xbf16>, memref<64x64xbf16>, memref<64x64xbf16>) -> ()
+              aie.objectfifo.release @of_2_broadcast_3_0(Consume, 1)
+              aie.objectfifo.release @of_3_distribute_3_3(Consume, 1)
+            }
+            aie.objectfifo.release @of_4_join_3_3(Produce, 1)
+          }
+        }
+      }
+      aie.end
+    } {link_with = "op3_mm_64_64_64.o"}
+    aie.objectfifo @of_0_mem_0(%shim_noc_tile_0_0, {%mem_tile_0_1}, [2 : i32, 2 : i32]) : !aie.objectfifo<memref<64x64xbf16>>  
+    aie.objectfifo @of_0_mem_1(%shim_noc_tile_1_0, {%mem_tile_1_1}, [2 : i32, 2 : i32]) : !aie.objectfifo<memref<64x64xbf16>>  
+    aie.objectfifo @of_0_mem_2(%shim_noc_tile_2_0, {%mem_tile_2_1}, [2 : i32, 2 : i32]) : !aie.objectfifo<memref<64x64xbf16>>  
+    aie.objectfifo @of_0_mem_3(%shim_noc_tile_3_0, {%mem_tile_3_1}, [2 : i32, 2 : i32]) : !aie.objectfifo<memref<64x64xbf16>>  
+    aie.objectfifo @of_1_mem_0(%shim_noc_tile_0_0, {%mem_tile_0_1}, [2 : i32, 2 : i32]) : !aie.objectfifo<memref<4x64x64xbf16>>  
+    aie.objectfifo @of_1_mem_1(%shim_noc_tile_1_0, {%mem_tile_1_1}, [2 : i32, 2 : i32]) : !aie.objectfifo<memref<4x64x64xbf16>>  
+    aie.objectfifo @of_1_mem_2(%shim_noc_tile_2_0, {%mem_tile_2_1}, [2 : i32, 2 : i32]) : !aie.objectfifo<memref<4x64x64xbf16>>  
+    aie.objectfifo @of_1_mem_3(%shim_noc_tile_3_0, {%mem_tile_3_1}, [2 : i32, 2 : i32]) : !aie.objectfifo<memref<4x64x64xbf16>>  
+    aie.objectfifo @of_2_broadcast_0_0(%mem_tile_0_1 dimensionsToStream [<size = 8, stride = 512>, <size = 8, stride = 8>, <size = 8, stride = 64>, <size = 8, stride = 1>], {%tile_0_2, %tile_1_2, %tile_2_2, %tile_3_2}, [2 : i32, 2 : i32, 2 : i32, 2 : i32, 2 : i32]) : !aie.objectfifo<memref<64x64xbf16>>  
+    aie.objectfifo.link [@of_0_mem_0] -> [@of_2_broadcast_0_0]([] [])
+    aie.objectfifo @of_2_broadcast_1_0(%mem_tile_1_1 dimensionsToStream [<size = 8, stride = 512>, <size = 8, stride = 8>, <size = 8, stride = 64>, <size = 8, stride = 1>], {%tile_0_3, %tile_1_3, %tile_2_3, %tile_3_3}, [2 : i32, 2 : i32, 2 : i32, 2 : i32, 2 : i32]) : !aie.objectfifo<memref<64x64xbf16>>  
+    aie.objectfifo.link [@of_0_mem_1] -> [@of_2_broadcast_1_0]([] [])
+    aie.objectfifo @of_2_broadcast_2_0(%mem_tile_2_1 dimensionsToStream [<size = 8, stride = 512>, <size = 8, stride = 8>, <size = 8, stride = 64>, <size = 8, stride = 1>], {%tile_0_4, %tile_1_4, %tile_2_4, %tile_3_4}, [2 : i32, 2 : i32, 2 : i32, 2 : i32, 2 : i32]) : !aie.objectfifo<memref<64x64xbf16>>  
+    aie.objectfifo.link [@of_0_mem_2] -> [@of_2_broadcast_2_0]([] [])
+    aie.objectfifo @of_2_broadcast_3_0(%mem_tile_3_1 dimensionsToStream [<size = 8, stride = 512>, <size = 8, stride = 8>, <size = 8, stride = 64>, <size = 8, stride = 1>], {%tile_0_5, %tile_1_5, %tile_2_5, %tile_3_5}, [2 : i32, 2 : i32, 2 : i32, 2 : i32, 2 : i32]) : !aie.objectfifo<memref<64x64xbf16>>  
+    aie.objectfifo.link [@of_0_mem_3] -> [@of_2_broadcast_3_0]([] [])
+    aie.objectfifo @of_3_distribute_0_0(%mem_tile_0_1 dimensionsToStream [<size = 8, stride = 512>, <size = 8, stride = 8>, <size = 8, stride = 64>, <size = 8, stride = 1>], {%tile_0_2}, [2 : i32, 2 : i32]) : !aie.objectfifo<memref<64x64xbf16>>  
+    aie.objectfifo @of_3_distribute_0_1(%mem_tile_0_1 dimensionsToStream [<size = 8, stride = 512>, <size = 8, stride = 8>, <size = 8, stride = 64>, <size = 8, stride = 1>], {%tile_1_2}, [2 : i32, 2 : i32]) : !aie.objectfifo<memref<64x64xbf16>>  
+    aie.objectfifo @of_3_distribute_0_2(%mem_tile_0_1 dimensionsToStream [<size = 8, stride = 512>, <size = 8, stride = 8>, <size = 8, stride = 64>, <size = 8, stride = 1>], {%tile_2_2}, [2 : i32, 2 : i32]) : !aie.objectfifo<memref<64x64xbf16>>  
+    aie.objectfifo @of_3_distribute_0_3(%mem_tile_0_1 dimensionsToStream [<size = 8, stride = 512>, <size = 8, stride = 8>, <size = 8, stride = 64>, <size = 8, stride = 1>], {%tile_3_2}, [2 : i32, 2 : i32]) : !aie.objectfifo<memref<64x64xbf16>>  
+    aie.objectfifo.link [@of_1_mem_0] -> [@of_3_distribute_0_0, @of_3_distribute_0_1, @of_3_distribute_0_2, @of_3_distribute_0_3]([] [0, 4096, 8192, 12288])
+    aie.objectfifo @of_3_distribute_1_0(%mem_tile_1_1 dimensionsToStream [<size = 8, stride = 512>, <size = 8, stride = 8>, <size = 8, stride = 64>, <size = 8, stride = 1>], {%tile_0_3}, [2 : i32, 2 : i32]) : !aie.objectfifo<memref<64x64xbf16>>  
+    aie.objectfifo @of_3_distribute_1_1(%mem_tile_1_1 dimensionsToStream [<size = 8, stride = 512>, <size = 8, stride = 8>, <size = 8, stride = 64>, <size = 8, stride = 1>], {%tile_1_3}, [2 : i32, 2 : i32]) : !aie.objectfifo<memref<64x64xbf16>>  
+    aie.objectfifo @of_3_distribute_1_2(%mem_tile_1_1 dimensionsToStream [<size = 8, stride = 512>, <size = 8, stride = 8>, <size = 8, stride = 64>, <size = 8, stride = 1>], {%tile_2_3}, [2 : i32, 2 : i32]) : !aie.objectfifo<memref<64x64xbf16>>  
+    aie.objectfifo @of_3_distribute_1_3(%mem_tile_1_1 dimensionsToStream [<size = 8, stride = 512>, <size = 8, stride = 8>, <size = 8, stride = 64>, <size = 8, stride = 1>], {%tile_3_3}, [2 : i32, 2 : i32]) : !aie.objectfifo<memref<64x64xbf16>>  
+    aie.objectfifo.link [@of_1_mem_1] -> [@of_3_distribute_1_0, @of_3_distribute_1_1, @of_3_distribute_1_2, @of_3_distribute_1_3]([] [0, 4096, 8192, 12288])
+    aie.objectfifo @of_3_distribute_2_0(%mem_tile_2_1 dimensionsToStream [<size = 8, stride = 512>, <size = 8, stride = 8>, <size = 8, stride = 64>, <size = 8, stride = 1>], {%tile_0_4}, [2 : i32, 2 : i32]) : !aie.objectfifo<memref<64x64xbf16>>  
+    aie.objectfifo @of_3_distribute_2_1(%mem_tile_2_1 dimensionsToStream [<size = 8, stride = 512>, <size = 8, stride = 8>, <size = 8, stride = 64>, <size = 8, stride = 1>], {%tile_1_4}, [2 : i32, 2 : i32]) : !aie.objectfifo<memref<64x64xbf16>>  
+    aie.objectfifo @of_3_distribute_2_2(%mem_tile_2_1 dimensionsToStream [<size = 8, stride = 512>, <size = 8, stride = 8>, <size = 8, stride = 64>, <size = 8, stride = 1>], {%tile_2_4}, [2 : i32, 2 : i32]) : !aie.objectfifo<memref<64x64xbf16>>  
+    aie.objectfifo @of_3_distribute_2_3(%mem_tile_2_1 dimensionsToStream [<size = 8, stride = 512>, <size = 8, stride = 8>, <size = 8, stride = 64>, <size = 8, stride = 1>], {%tile_3_4}, [2 : i32, 2 : i32]) : !aie.objectfifo<memref<64x64xbf16>>  
+    aie.objectfifo.link [@of_1_mem_2] -> [@of_3_distribute_2_0, @of_3_distribute_2_1, @of_3_distribute_2_2, @of_3_distribute_2_3]([] [0, 4096, 8192, 12288])
+    aie.objectfifo @of_3_distribute_3_0(%mem_tile_3_1 dimensionsToStream [<size = 8, stride = 512>, <size = 8, stride = 8>, <size = 8, stride = 64>, <size = 8, stride = 1>], {%tile_0_5}, [2 : i32, 2 : i32]) : !aie.objectfifo<memref<64x64xbf16>>  
+    aie.objectfifo @of_3_distribute_3_1(%mem_tile_3_1 dimensionsToStream [<size = 8, stride = 512>, <size = 8, stride = 8>, <size = 8, stride = 64>, <size = 8, stride = 1>], {%tile_1_5}, [2 : i32, 2 : i32]) : !aie.objectfifo<memref<64x64xbf16>>  
+    aie.objectfifo @of_3_distribute_3_2(%mem_tile_3_1 dimensionsToStream [<size = 8, stride = 512>, <size = 8, stride = 8>, <size = 8, stride = 64>, <size = 8, stride = 1>], {%tile_2_5}, [2 : i32, 2 : i32]) : !aie.objectfifo<memref<64x64xbf16>>  
+    aie.objectfifo @of_3_distribute_3_3(%mem_tile_3_1 dimensionsToStream [<size = 8, stride = 512>, <size = 8, stride = 8>, <size = 8, stride = 64>, <size = 8, stride = 1>], {%tile_3_5}, [2 : i32, 2 : i32]) : !aie.objectfifo<memref<64x64xbf16>>  
+    aie.objectfifo.link [@of_1_mem_3] -> [@of_3_distribute_3_0, @of_3_distribute_3_1, @of_3_distribute_3_2, @of_3_distribute_3_3]([] [0, 4096, 8192, 12288])
+    aie.objectfifo @of_4_join_0_0(%tile_0_2, {%mem_tile_0_1}, [2 : i32, 2 : i32]) : !aie.objectfifo<memref<64x64xbf16>>  
+    aie.objectfifo @of_4_join_0_1(%tile_1_2, {%mem_tile_0_1}, [2 : i32, 2 : i32]) : !aie.objectfifo<memref<64x64xbf16>>  
+    aie.objectfifo @of_4_join_0_2(%tile_2_2, {%mem_tile_0_1}, [2 : i32, 2 : i32]) : !aie.objectfifo<memref<64x64xbf16>>  
+    aie.objectfifo @of_4_join_0_3(%tile_3_2, {%mem_tile_0_1}, [2 : i32, 2 : i32]) : !aie.objectfifo<memref<64x64xbf16>>  
+    aie.objectfifo @of_4_join_1_0(%tile_0_3, {%mem_tile_1_1}, [2 : i32, 2 : i32]) : !aie.objectfifo<memref<64x64xbf16>>  
+    aie.objectfifo @of_4_join_1_1(%tile_1_3, {%mem_tile_1_1}, [2 : i32, 2 : i32]) : !aie.objectfifo<memref<64x64xbf16>>  
+    aie.objectfifo @of_4_join_1_2(%tile_2_3, {%mem_tile_1_1}, [2 : i32, 2 : i32]) : !aie.objectfifo<memref<64x64xbf16>>  
+    aie.objectfifo @of_4_join_1_3(%tile_3_3, {%mem_tile_1_1}, [2 : i32, 2 : i32]) : !aie.objectfifo<memref<64x64xbf16>>  
+    aie.objectfifo @of_4_join_2_0(%tile_0_4, {%mem_tile_2_1}, [2 : i32, 2 : i32]) : !aie.objectfifo<memref<64x64xbf16>>  
+    aie.objectfifo @of_4_join_2_1(%tile_1_4, {%mem_tile_2_1}, [2 : i32, 2 : i32]) : !aie.objectfifo<memref<64x64xbf16>>  
+    aie.objectfifo @of_4_join_2_2(%tile_2_4, {%mem_tile_2_1}, [2 : i32, 2 : i32]) : !aie.objectfifo<memref<64x64xbf16>>  
+    aie.objectfifo @of_4_join_2_3(%tile_3_4, {%mem_tile_2_1}, [2 : i32, 2 : i32]) : !aie.objectfifo<memref<64x64xbf16>>  
+    aie.objectfifo @of_4_join_3_0(%tile_0_5, {%mem_tile_3_1}, [2 : i32, 2 : i32]) : !aie.objectfifo<memref<64x64xbf16>>  
+    aie.objectfifo @of_4_join_3_1(%tile_1_5, {%mem_tile_3_1}, [2 : i32, 2 : i32]) : !aie.objectfifo<memref<64x64xbf16>>  
+    aie.objectfifo @of_4_join_3_2(%tile_2_5, {%mem_tile_3_1}, [2 : i32, 2 : i32]) : !aie.objectfifo<memref<64x64xbf16>>  
+    aie.objectfifo @of_4_join_3_3(%tile_3_5, {%mem_tile_3_1}, [2 : i32, 2 : i32]) : !aie.objectfifo<memref<64x64xbf16>>  
+    aie.objectfifo @of_5_mem_0(%mem_tile_0_1 dimensionsToStream [<size = 8, stride = 512>, <size = 8, stride = 8>, <size = 8, stride = 64>, <size = 8, stride = 1>], {%shim_noc_tile_0_0}, [2 : i32, 2 : i32]) : !aie.objectfifo<memref<4x64x64xbf16>>  
+    aie.objectfifo.link [@of_4_join_0_0, @of_4_join_0_1, @of_4_join_0_2, @of_4_join_0_3] -> [@of_5_mem_0]([0, 4096, 8192, 12288] [])
+    aie.objectfifo @of_5_mem_1(%mem_tile_1_1 dimensionsToStream [<size = 8, stride = 512>, <size = 8, stride = 8>, <size = 8, stride = 64>, <size = 8, stride = 1>], {%shim_noc_tile_1_0}, [2 : i32, 2 : i32]) : !aie.objectfifo<memref<4x64x64xbf16>>  
+    aie.objectfifo.link [@of_4_join_1_0, @of_4_join_1_1, @of_4_join_1_2, @of_4_join_1_3] -> [@of_5_mem_1]([0, 4096, 8192, 12288] [])
+    aie.objectfifo @of_5_mem_2(%mem_tile_2_1 dimensionsToStream [<size = 8, stride = 512>, <size = 8, stride = 8>, <size = 8, stride = 64>, <size = 8, stride = 1>], {%shim_noc_tile_2_0}, [2 : i32, 2 : i32]) : !aie.objectfifo<memref<4x64x64xbf16>>  
+    aie.objectfifo.link [@of_4_join_2_0, @of_4_join_2_1, @of_4_join_2_2, @of_4_join_2_3] -> [@of_5_mem_2]([0, 4096, 8192, 12288] [])
+    aie.objectfifo @of_5_mem_3(%mem_tile_3_1 dimensionsToStream [<size = 8, stride = 512>, <size = 8, stride = 8>, <size = 8, stride = 64>, <size = 8, stride = 1>], {%shim_noc_tile_3_0}, [2 : i32, 2 : i32]) : !aie.objectfifo<memref<4x64x64xbf16>>  
+    aie.objectfifo.link [@of_4_join_3_0, @of_4_join_3_1, @of_4_join_3_2, @of_4_join_3_3] -> [@of_5_mem_3]([0, 4096, 8192, 12288] [])
+    func.func private @op3_zero_bf16_64_64_64(memref<64x64xbf16>)
+    func.func private @op3_matmul_bf16_bf16_64_64_64(memref<64x64xbf16>, memref<64x64xbf16>, memref<64x64xbf16>)
+    aie.trace @trace_core_0(%tile_0_2) {
+      aie.trace.mode "Event-Time"
+      aie.trace.packet type = core
+      aie.trace.event <"INSTR_EVENT_0">
+      aie.trace.event <"INSTR_EVENT_1">
+      aie.trace.event <"MEMORY_STALL">
+      aie.trace.event <"LOCK_STALL">
+      aie.trace.event <"INSTR_VECTOR">
+      aie.trace.event <"NONE">
+      aie.trace.event <"NONE">
+      aie.trace.event <"NONE">
+      aie.trace.start broadcast = 15
+      aie.trace.stop broadcast = 14
+    }
+    aie.trace @trace_core_1(%tile_0_3) {
+      aie.trace.mode "Event-Time"
+      aie.trace.packet type = core
+      aie.trace.event <"INSTR_EVENT_0">
+      aie.trace.event <"INSTR_EVENT_1">
+      aie.trace.event <"MEMORY_STALL">
+      aie.trace.event <"LOCK_STALL">
+      aie.trace.event <"INSTR_VECTOR">
+      aie.trace.event <"NONE">
+      aie.trace.event <"NONE">
+      aie.trace.event <"NONE">
+      aie.trace.start broadcast = 15
+      aie.trace.stop broadcast = 14
+    }
+  }
+}
