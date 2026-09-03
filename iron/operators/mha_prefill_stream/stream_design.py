@@ -386,57 +386,11 @@ def _placements(seq_len, d_head, k, causal, flash=False, cfg=None):
     }
 
 
-def _layer_tiling(layer, seq_len, d_head, k, flash=False, cfg=None):
-    """Each of the layer's dimensions, as (dim, tile, the extent one core holds)."""
-    query = query_per_core(seq_len, k, flash, cfg)
-    if layer in (SCORES_NODE, SCORE_SOFTMAX_NODE):
-        rows, contraction, key = _scores_tile(seq_len, d_head, k, flash, cfg)
-        return [
-            ("D0", rows, query),
-            ("D1", contraction, d_head),
-            ("D2", key, seq_len // GEMM_COLUMNS),
-        ]
-    if layer == SOFTMAX_NODE:
-        return [
-            ("D0", _softmax_rows(seq_len, k, flash, cfg), query),
-            ("D1", FLASH_BLOCK if flash else seq_len, seq_len),
-        ]
-    head = d_head // _context_columns(d_head)
-    return [
-        ("D0", query_tile(seq_len, k, flash, cfg), query),
-        ("D1", key_tile(seq_len, k, flash), seq_len),
-        ("D2", head, head),
-    ]
-
-
-def _nesting(dims, flash):
-    """The dimensions in the order the group declares them, which is innermost first.
-
-    Blocked, the key has to be the inner loop: one running scale and one context block
-    belong to one query block, so that query block has to finish before the next starts.
-    """
-    return dims[::-1] if flash else dims
-
-
 def _groups(seq_len, d_head, k, flash=False, cfg=None):
-    """The fused groups, each tiling only the dimensions it actually iterates.
-
-    A dimension a core already holds whole is left out: the loop would run once and
-    still cost a reuse variable, and a tensor gets one.
-    """
+    """The fused groups. Their tiling is the kernels' granules, derived by stream --
+    innermost first, the carried key leading under flash."""
     return [
-        FusedGroup(
-            f"Fused_Group_{index + 1}",
-            layers,
-            [
-                (layer, dim, tile)
-                for layer in layers
-                for dim, tile, extent in _nesting(
-                    _layer_tiling(layer, seq_len, d_head, k, flash, cfg), flash
-                )
-                if tile < extent
-            ],
-        )
+        FusedGroup(f"Fused_Group_{index + 1}", layers)
         for index, layers in enumerate(group_layers(k, cfg))
     ]
 

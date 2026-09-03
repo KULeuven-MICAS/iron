@@ -55,13 +55,12 @@ RESULT_NAMES = {
     MUL: reference.HIDDEN,
 }
 
-# The kernel tile each layer is compiled and mapped for, as (sequence, embedding,
-# hidden). A fused group spreads its layers over disjoint columns, so what bounds the
-# tile is the elementwise cores, which hold three operands at once: at 64x64x64 the
-# multiply core needs 80 KB of its 64 KB. Carrying the tile and no absolute dimension
-# is what lets one mapping hold across problem sizes.
-FUSED_TILES = (32, 32, 64)  # k=1, k=2: bounded by the elementwise cores
-LAYER_TILES = (64, 64, 64)  # k=5: one layer per core
+# The block each GEMM object is compiled for, as (sequence, embedding, hidden). This is
+# a kernel property, not a tiling: steady-state tiles are stream's choice, seeded from
+# these granules. Fused groups compile a smaller block because the elementwise cores
+# hold three operands at once (at 64x64x64 the multiply core needs 80 KB of its 64 KB).
+FUSED_BLOCK = (32, 32, 64)  # k=1, k=2
+LAYER_BLOCK = (64, 64, 64)  # k=5
 
 # Sequence positions an elementwise layer works at a time when it reads from and
 # writes to memory. Its tile is then this many whole rows, which is contiguous in
@@ -83,14 +82,14 @@ GROUP_LAYERS = {
 }
 
 
-def tiles_for(k):
-    """The kernel tile, as (sequence, embedding, hidden), for ``k`` fused groups."""
-    return LAYER_TILES if k == LAYER_BY_LAYER else FUSED_TILES
+def block_for(k):
+    """The compiled GEMM block, as (sequence, embedding, hidden), for ``k`` fused groups."""
+    return LAYER_BLOCK if k == LAYER_BY_LAYER else FUSED_BLOCK
 
 
-def gemm_tiles(k):
-    """Each GEMM layer's kernel tile, in the (m, k, n) order the kernel takes."""
-    sequence, embedding, hidden = tiles_for(k)
+def gemm_blocks(k):
+    """Each GEMM layer's compiled block, in the (m, k, n) order the kernel takes."""
+    sequence, embedding, hidden = block_for(k)
     return {
         GATE: (sequence, embedding, hidden),
         UP: (sequence, embedding, hidden),
@@ -134,8 +133,8 @@ def _placements(k, hidden_dim):
     also read whole rows, so their transfers to and from memory are contiguous.
     """
     grid = array()
-    sequence_tile, _, hidden_tile = tiles_for(k)
-    tiles = gemm_tiles(k)
+    sequence_tile, _, hidden_tile = block_for(k)
+    tiles = gemm_blocks(k)
 
     def gemm(tiles):
         return dict(
@@ -178,52 +177,18 @@ def _placements(k, hidden_dim):
     }
 
 
-def _layer_tiling(layer, hidden_dim, k):
-    """Intra-core tiling of one layer, over the dimensions it iterates."""
-    if layer not in (GATE, UP, DOWN):
-        return [(layer, "D1", _row_width(hidden_dim)), (layer, "D0", ELEMENTWISE_ROWS)]
-    sequence, contraction, output = gemm_tiles(k)[layer]
-    return [
-        (layer, "D1", contraction),
-        (layer, "D2", output),
-        (layer, "D0", sequence),
-    ]
-
-
 def _groups(k, hidden_dim):
-    """The fused groups, each with the intra-core tiling of its leading GEMM.
-
-    Splitting makes stream-dse emit one design per group, which IRON then deploys
-    as a single full ELF. D0 is the sequence dimension, D1 the contraction and D2
-    the output dimension.
-    """
-    sequence_tile, embedding_tile, hidden_tile = tiles_for(k)
-    if k == LAYER_BY_LAYER:
-        tiling = [_layer_tiling(layers[0], hidden_dim, k) for layers in GROUP_LAYERS[k]]
-    elif k == 2:
-        tiling = [
-            _layer_tiling(GATE, hidden_dim, k),
-            _layer_tiling(DOWN, hidden_dim, k),
-        ]
-    else:
-        tiling = [
-            [
-                (GATE, "D1", embedding_tile),
-                (DOWN, "D2", embedding_tile),
-                (GATE, "D2", hidden_tile),
-                (GATE, "D0", sequence_tile),
-            ]
-        ]
+    """The fused groups. Their tiling is the kernels' granules, derived by stream."""
     return [
-        FusedGroup(f"Fused_Group_{index + 1}", layers, group_tiling)
-        for index, (layers, group_tiling) in enumerate(zip(GROUP_LAYERS[k], tiling))
+        FusedGroup(f"Fused_Group_{index + 1}", layers)
+        for index, layers in enumerate(GROUP_LAYERS[k])
     ]
 
 
 def _check_shapes(seq_len, embedding_dim, hidden_dim, k):
     """Reject a problem size the placement and the kernel tiles cannot divide."""
     grid = array()
-    sequence_tile, embedding_tile, hidden_tile = tiles_for(k)
+    sequence_tile, embedding_tile, hidden_tile = block_for(k)
     gemm_split = grid.num_columns if k == LAYER_BY_LAYER else 2
     if seq_len % grid.num_rows or seq_len < sequence_tile * grid.num_rows:
         raise ValueError(

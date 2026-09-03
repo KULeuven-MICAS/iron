@@ -48,11 +48,11 @@ class _SwiGLUStreamGroup(StreamGroup):
 
     def _per_layer(self):
         design = self._design
-        gemm_tiles = design.gemm_tiles(self.k)
+        gemm_blocks = design.gemm_blocks(self.k)
         return {
-            design.GATE: (GEMM, gemm_tiles[design.GATE]),
-            design.UP: (GEMM, gemm_tiles[design.UP]),
-            design.DOWN: (GEMM, gemm_tiles[design.DOWN]),
+            design.GATE: (GEMM, gemm_blocks[design.GATE]),
+            design.UP: (GEMM, gemm_blocks[design.UP]),
+            design.DOWN: (GEMM, gemm_blocks[design.DOWN]),
             design.SILU: (SILU, None),
             design.MUL: (ELTWISE_MUL, None),
         }
