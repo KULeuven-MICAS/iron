@@ -19,6 +19,7 @@ from aie.extras.context import mlir_mod_ctx
 import ml_dtypes
 
 import os
+import re
 from typing import Any
 
 from . import (
@@ -245,10 +246,15 @@ def fuse_mlir(artifact: SequenceMLIRArtifact) -> None:
 
             # RuntimeSequenceOp
             trace_size = artifact.trace_size
+            # IRON_TRACE_OP names a runlist position; design sharing renumbers the
+            # generated devices, so the position is resolved to the design it runs.
+            traced = os.environ.get("IRON_TRACE_OP") or None
+            if traced and (match := re.match(r"op(\d+)_", traced)):
+                traced = artifact.runlist[int(match.group(1))][0]
             consolidated_idx, trace_slots, n_args = trace_argument_layout(
                 {name: len(sequence_arg_types[name]) for name, *_ in artifact.runlist},
                 trace_size,
-                os.environ.get("IRON_TRACE_OP") or None,
+                traced,
             )
             trace_indices = sorted(set(trace_slots.values()))
 
