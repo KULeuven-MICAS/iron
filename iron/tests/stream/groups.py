@@ -237,10 +237,10 @@ def test_two_configs_give_two_designs_in_one_process(tmp_path):
     """A config is a value the operator carries, not module state: neither of these
     fixes the other, which constants read from the environment at import could not."""
     mappings = []
-    for query in (64, 128):
-        cfg = mha.DesignConfig(flash_query=query)
+    for fused in (False, True):
+        cfg = mha.DesignConfig(fused_kernel=fused)
         _, path = mha.build_inputs(
-            256, 64, output_dir=str(tmp_path / f"q{query}"), k=1, flash=True, cfg=cfg
+            256, 64, output_dir=str(tmp_path / f"fused{fused}"), k=1, flash=True, cfg=cfg
         )
         assert group_findings(yaml.safe_load(Path(path).read_text()), 0) == []
         mappings.append(Path(path).read_text())
