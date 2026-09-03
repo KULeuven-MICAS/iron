@@ -47,12 +47,14 @@ holds. The groups are `stream_design.GROUP_LAYERS`.
 k=1 and k=2 fuse several layers onto each core, so intermediates stay on chip. k=5 is
 the shape [`swiglu_prefill`](../swiglu_prefill) uses, every layer its own design.
 
-A core holds the operands of every layer in its group, so the kernel tile a group can
-afford shrinks as more layers fuse onto it. That is why the tile is chosen per `k`
-(`stream_design.FUSED_TILES` and `LAYER_TILES`). A tile that does not fit is rejected at
-build time by stream-dse, naming the core and the shortfall.
+A core holds the operands of every layer in its group, so the kernel block a group can
+afford shrinks as more layers fuse onto it. That is why the compiled GEMM block is
+chosen per `k` (`stream_design.FUSED_BLOCK` and `LAYER_BLOCK`); these are kernel
+properties -- the fixed shape one call consumes -- not tilings. Steady-state tiles are
+stream-dse's choice, seeded from the granules those blocks define, and a seed that does
+not fit is rejected at build time, naming the core and the shortfall.
 
-The tile also bounds the problem sizes: `seq_len` must be a multiple of the array rows,
+The block also bounds the problem sizes: `seq_len` must be a multiple of the array rows,
 and `embedding_dim` and `hidden_dim` multiples of their tile times the column split.
 `stream_design._check_shapes` enforces this and names the offending dimension.
 
