@@ -51,8 +51,10 @@ def experiment_id(family: str, shape: str, suffix: str = "") -> str:
         suffix += f"_force_{os.environ['STREAM_TILE_FORCE']}"
     if trace_size():
         # The buffer size is compiled into the runtime sequence, so a design
-        # generated for one size cannot serve another; same for which tiles.
+        # generated for one size cannot serve another; same for which group and tiles.
         suffix += f"_traced{trace_size()}"
+        if (group := trace_group()) is not None:
+            suffix += f"_g{group}"
         for col, row in trace_tile_list():
             suffix += f"_{col}x{row}"
     return (
