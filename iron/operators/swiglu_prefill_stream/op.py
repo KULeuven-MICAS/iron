@@ -48,7 +48,9 @@ class _SwiGLUStreamGroup(StreamGroup):
 
     def _per_layer(self):
         design = self._design
-        gemm_blocks = design.gemm_blocks(self.k)
+        gemm_blocks = design.gemm_blocks(
+            design.chosen_block(self.seq_len, self.embedding_dim, self.hidden_dim, self._dims()["npu"], self.k)
+        )
         return {
             design.GATE: (GEMM, gemm_blocks[design.GATE]),
             design.UP: (GEMM, gemm_blocks[design.UP]),

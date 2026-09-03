@@ -18,6 +18,8 @@ importing the operator does not require ``stream-dse`` to be installed, only
 building it does.
 """
 
+import json
+import logging
 import os
 from functools import lru_cache
 from pathlib import Path
@@ -32,6 +34,11 @@ from iron.common.stream.design import (
 )
 from iron.common.stream.hardware import array
 from iron.common.stream.runner import design_dir, experiment_id, run_codegen
+
+try:
+    from stream.ir.infeasibility import InfeasibleAllocationError
+except ImportError:
+    InfeasibleAllocationError = RuntimeError
 from iron.common.stream.mapping import (
     FusedGroup,
     Placement,
@@ -55,12 +62,10 @@ RESULT_NAMES = {
     MUL: reference.HIDDEN,
 }
 
-# The block each GEMM object is compiled for, as (sequence, embedding, hidden). This is
-# a kernel property, not a tiling: steady-state tiles are stream's choice, seeded from
-# these granules. Fused groups compile a smaller block because the elementwise cores
-# hold three operands at once (at 64x64x64 the multiply core needs 80 KB of its 64 KB).
-FUSED_BLOCK = (32, 32, 64)  # k=1, k=2
-LAYER_BLOCK = (64, 64, 64)  # k=5
+# The blocks a GEMM object can be compiled for, largest first, as (sequence, embedding,
+# hidden). Which one a configuration gets is not declared: the build tries them in order
+# and stream's solve is the arbiter, rejecting a block that does not fit its cores.
+GEMM_BLOCKS = ((64, 64, 64), (32, 32, 64))
 
 # Sequence positions an elementwise layer works at a time when it reads from and
 # writes to memory. Its tile is then this many whole rows, which is contiguous in
@@ -74,6 +79,8 @@ ELEMENTWISE_WIDTH = 2048
 # Which layers each fused group contains, per number of groups ``k``. Splitting
 # makes stream-dse emit one design per group; the tensor handed from one group to
 # the next comes from the exported graph.
+logger = logging.getLogger(__name__)
+
 LAYER_BY_LAYER = 5
 GROUP_LAYERS = {
     1: [[GATE, UP, SILU, MUL, DOWN]],
@@ -82,14 +89,9 @@ GROUP_LAYERS = {
 }
 
 
-def block_for(k):
-    """The compiled GEMM block, as (sequence, embedding, hidden), for ``k`` fused groups."""
-    return LAYER_BLOCK if k == LAYER_BY_LAYER else FUSED_BLOCK
-
-
-def gemm_blocks(k):
+def gemm_blocks(block):
     """Each GEMM layer's compiled block, in the (m, k, n) order the kernel takes."""
-    sequence, embedding, hidden = block_for(k)
+    sequence, embedding, hidden = block
     return {
         GATE: (sequence, embedding, hidden),
         UP: (sequence, embedding, hidden),
@@ -119,14 +121,14 @@ def default_groups(hidden_dim):
     return LAYER_BY_LAYER
 
 
-def _placements(k, hidden_dim):
+def _placements(k, hidden_dim, block):
     """The kernel of each layer; where they run is stream's PlacementGenerationStage.
 
     Split per layer, the elementwise kernels read whole rows so their transfers to and
     from memory are contiguous; fused behind a GEMM they take the block that GEMM
     writes, in the layout it writes it.
     """
-    tiles = gemm_blocks(k)
+    tiles = gemm_blocks(block)
 
     def gemm(block):
         return dict(zip("mkn", block), utilization=61.8, layout="default", bfp16_mmul=True)
@@ -135,7 +137,7 @@ def _placements(k, hidden_dim):
         wide = elementwise(1, _row_width(hidden_dim), "contiguous")
         elementwise_kwargs = {SILU: wide, MUL: wide}
     else:
-        sequence_tile, _, hidden_tile = block_for(k)
+        sequence_tile, _, hidden_tile = block
         fused = elementwise(sequence_tile, hidden_tile, "default", bfp16_mmul=True)
         elementwise_kwargs = {SILU: fused, MUL: fused}
     return {
@@ -166,9 +168,9 @@ def _groups(k, hidden_dim):
 
 
 def _check_shapes(seq_len, embedding_dim, hidden_dim, k):
-    """Reject a problem size the placement and the kernel tiles cannot divide."""
+    """Reject a problem size no compiled block can divide."""
     grid = array()
-    sequence_tile, embedding_tile, hidden_tile = block_for(k)
+    sequence_tile, embedding_tile, hidden_tile = GEMM_BLOCKS[-1]
     gemm_split = grid.num_columns if k == LAYER_BY_LAYER else 2
     if seq_len % grid.num_rows or seq_len < sequence_tile * grid.num_rows:
         raise ValueError(
@@ -209,7 +211,7 @@ def group_ports(seq_len, embedding_dim, hidden_dim, k=1):
     )
 
 
-def build_inputs(seq_len, embedding_dim, hidden_dim, output_dir, k=1):
+def build_inputs(seq_len, embedding_dim, hidden_dim, output_dir, k=1, block=GEMM_BLOCKS[-1]):
     """Write the workload and mapping for one configuration; return their paths."""
     _check_shapes(seq_len, embedding_dim, hidden_dim, k)
     workload = workload_for(seq_len, embedding_dim, hidden_dim)
@@ -218,7 +220,7 @@ def build_inputs(seq_len, embedding_dim, hidden_dim, output_dir, k=1):
         workload.write(output_dir / "workload.onnx"),
         emit_mapping(
             workload,
-            _placements(k, hidden_dim),
+            _placements(k, hidden_dim, block),
             _groups(k, hidden_dim),
             array(),
             output_dir / "mapping.yaml",
@@ -231,13 +233,34 @@ def _experiment_id(seq_len, embedding_dim, hidden_dim, k):
     return experiment_id("swiglu", f"{seq_len}_{embedding_dim}_{hidden_dim}", suffix)
 
 
+def _block_marker(eid):
+    return Path(design_dir(eid)) / "gemm_block.json"
+
+
+def chosen_block(seq_len, embedding_dim, hidden_dim, npu, k):
+    """The compiled GEMM block the solve accepted, building the design if needed."""
+    marker = _block_marker(_experiment_id(seq_len, embedding_dim, hidden_dim, k))
+    if not marker.exists():
+        _run_codegen(seq_len, embedding_dim, hidden_dim, npu, k)
+    return tuple(json.loads(marker.read_text()))
+
+
 def _run_codegen(seq_len, embedding_dim, hidden_dim, npu, k):
-    """Run stream-dse's constraint optimization and code generation once."""
+    """Build with the largest block the solve accepts; the last candidate must hold."""
     eid = _experiment_id(seq_len, embedding_dim, hidden_dim, k)
-    workload_path, mapping_path = build_inputs(
-        seq_len, embedding_dim, hidden_dim, design_dir(eid), k=k
-    )
-    run_codegen(eid, workload_path, mapping_path, npu)
+    for block in GEMM_BLOCKS:
+        workload_path, mapping_path = build_inputs(
+            seq_len, embedding_dim, hidden_dim, design_dir(eid), k=k, block=block
+        )
+        try:
+            run_codegen(eid, workload_path, mapping_path, npu)
+        except (InfeasibleAllocationError, RuntimeError) as error:
+            if block is GEMM_BLOCKS[-1]:
+                raise
+            logger.info("Block %s does not fit (%s); trying the next", block, error)
+            continue
+        _block_marker(eid).write_text(json.dumps(block))
+        return
 
 
 def _design_paths(seq_len, embedding_dim, hidden_dim, k):
