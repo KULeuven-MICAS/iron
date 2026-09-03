@@ -41,12 +41,19 @@ DESIGNS = {
 
 
 def _cores(layer: dict) -> list[int]:
-    return layer["core_allocation"][0]
+    allocation = layer["core_allocation"]
+    return allocation[0] if allocation else []
 
 
 def layer_findings(layer: dict) -> list[str]:
     """Why this layer cannot be lowered, one finding each. Empty means it can."""
     name, cores = layer["name"], _cores(layer)
+    if not cores:
+        # Unplaced on purpose: stream's PlacementGenerationStage derives the cores and
+        # the split, and its own unit tests plus the byte-parity record cover them.
+        if not (layer.get("kernel") or {}).get("name"):
+            return [f"{name} declares neither a placement nor a kernel"]
+        return []
     tiling = layer.get("inter_core_tiling") or [[]]
     findings = []
     if len(tiling) > 1:

@@ -28,13 +28,6 @@ ARRAY = stream_design.array()
 DIMS = (256, 512, 2048)
 
 # The core ids the fused placement resolves to on the whole-array Strix target.
-MEASURED_ALLOCATION = {
-    "Gemm_Left": [2, 3, 4, 5, 8, 9, 10, 11],
-    "Gemm_Right": [14, 15, 16, 17, 20, 21, 22, 23],
-    "Silu": [26, 27, 28, 29],
-    "Elt_Mul": [32, 33, 34, 35],
-    "Gemm_Down": [38, 39, 40, 41, 44, 45, 46, 47],
-}
 
 
 def test_array_matches_the_device():
@@ -100,32 +93,29 @@ def test_ids_agree_with_the_accelerator_stream_solves_against():
     assert ARRAY.columns == expected
 
 
-def test_emitted_allocation_resolves_to_the_expected_cores(tmp_path):
+def test_the_mapping_declares_no_placement(tmp_path):
+    """Placement is stream's: every emitted layer carries a kernel and nothing else.
+
+    The byte-parity record (260903_B notes/02) is what pins the derived cores to the
+    previously hand-tuned ones; this guards the interface staying clean."""
     import yaml
 
     _, mapping_path = stream_design.build_inputs(*DIMS, tmp_path / "design")
-    emitted = {
-        layer["name"]: layer["core_allocation"][0]
-        for layer in yaml.safe_load(open(mapping_path))["layers"]
-    }
-    assert emitted == MEASURED_ALLOCATION
+    for layer in yaml.safe_load(open(mapping_path))["layers"]:
+        assert layer["core_allocation"] == []
+        assert layer["inter_core_tiling"] == []
+        assert layer["kernel"]["name"]
 
 
-def test_layer_by_layer_gives_every_layer_the_whole_array(tmp_path):
+def test_layer_by_layer_emits_one_group_per_layer(tmp_path):
     import yaml
 
     _, mapping_path = stream_design.build_inputs(
         *DIMS, tmp_path / "design_k5", k=stream_design.LAYER_BY_LAYER
     )
     mapping = yaml.safe_load(open(mapping_path))
-    columns = {
-        layer["name"]: {
-            core // (ARRAY.num_rows + 2) for core in layer["core_allocation"][0]
-        }
-        for layer in mapping["layers"]
-    }
-    assert all(used == set(ARRAY.all_columns) for used in columns.values())
     assert len(mapping["fused_groups"]) == stream_design.LAYER_BY_LAYER
+    assert all(len(group["layers"]) == 1 for group in mapping["fused_groups"])
 
 
 def test_devices_other_than_the_default_resolve():
