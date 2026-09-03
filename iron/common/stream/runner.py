@@ -45,6 +45,10 @@ def experiment_id(family: str, shape: str, suffix: str = "") -> str:
     """
     hardware = os.path.splitext(os.path.basename(ACCELERATOR))[0]
     grid = array()
+    if os.environ.get("STREAM_TILE_FORCE"):
+        # A forced tile choice is a different design; without this the probe run is
+        # served the cached unforced one and measures nothing.
+        suffix += f"_force_{os.environ['STREAM_TILE_FORCE']}"
     if trace_size():
         # The buffer size is compiled into the runtime sequence, so a design
         # generated for one size cannot serve another; same for which tiles.
