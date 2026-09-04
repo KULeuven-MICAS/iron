@@ -279,14 +279,17 @@ def _run_codegen(seq_len, embedding_dim, hidden_dim, npu, k):
                 candidate_dir = (
                     base / f"candidate_k{candidate_k}_b{'x'.join(map(str, block))}"
                 )
-                workload_path, mapping_path = build_inputs(
-                    seq_len,
-                    embedding_dim,
-                    hidden_dim,
-                    candidate_dir,
-                    k=candidate_k,
-                    block=block,
-                )
+                try:
+                    workload_path, mapping_path = build_inputs(
+                        seq_len,
+                        embedding_dim,
+                        hidden_dim,
+                        candidate_dir,
+                        k=candidate_k,
+                        block=block,
+                    )
+                except ValueError:
+                    continue
                 candidates.append(mapping_path)
                 shapes.append(block)
         run_partition_codegen(eid, workload_path, candidates, npu)
