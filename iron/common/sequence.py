@@ -102,7 +102,11 @@ class FusedDispatch(SequenceDispatch):
 
     def _folded_single_design(self, seq):
         """(design, span count, strides, span buffer names), or None to stay fused."""
-        if not self._single_design_xclbin or seq.trace_size:
+        if (
+            not self._single_design_xclbin
+            or seq.trace_size
+            or os.environ.get("IRON_ABLATE_FLOW")
+        ):
             return None
         designs, _ = seq.unique_designs()
         if len(designs) != 1:

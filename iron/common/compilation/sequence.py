@@ -323,9 +323,11 @@ def fuse_mlir(artifact: SequenceMLIRArtifact) -> None:
     sequence_arg_types = {}
     # A traced sequence carries a trailing buffer no window advances over, so folding
     # stays out of its way.
+    # IRON_ABLATE_FLOW keeps the unfolded per-entry runs, as the A/B arm of the
+    # ablation study.
     folded = (
         {}
-        if artifact.trace_size
+        if artifact.trace_size or os.environ.get("IRON_ABLATE_FLOW")
         else find_replicated_runs(
             artifact.runlist, artifact.slice_info, artifact.subbuffer_layout
         )

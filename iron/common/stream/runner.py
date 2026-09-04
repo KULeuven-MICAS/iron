@@ -49,6 +49,9 @@ def experiment_id(family: str, shape: str, suffix: str = "") -> str:
         # A forced tile choice is a different design; without this the probe run is
         # served the cached unforced one and measures nothing.
         suffix += f"_force_{os.environ['STREAM_TILE_FORCE']}"
+    if os.environ.get("STREAM_ABLATE_REPLAY"):
+        # The ablation arm without memory-tile replay is a different design too.
+        suffix += "_noreplay"
     if trace_size():
         # The buffer size is compiled into the runtime sequence, so a design
         # generated for one size cannot serve another; same for which group and tiles.
