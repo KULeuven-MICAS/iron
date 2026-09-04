@@ -31,5 +31,11 @@ from .base import (
 from .sequence import (
     SequenceMLIRArtifact,
     FusePythonGeneratedMLIRCompilationRule,
+    ReplicatedMLIRArtifact,
+    ReplicateMLIRCompilationRule,
+    find_replicated_runs,
+    fold_runlist,
+    get_child_mlir_module,
+    replicate_sequence,
     trace_argument_layout,
 )

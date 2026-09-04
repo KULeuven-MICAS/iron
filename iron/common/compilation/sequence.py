@@ -124,6 +124,166 @@ def get_child_mlir_module(mlir_artifact: PythonGeneratedMLIRArtifact) -> Any:
     return callback_function(*gen.args, **gen.kwargs)
 
 
+def _entry_windows(slice_info, subbuffer_layout, buffer_names: tuple[str, ...]):
+    """Each buffer's absolute (kind, offset, length) in its consolidated buffer."""
+    windows = []
+    for name in buffer_names:
+        if name in slice_info:
+            base, start, end = slice_info[name]
+            kind, parent_offset, _ = subbuffer_layout[base]
+            windows.append((kind, parent_offset + start, end - start, base, start))
+        else:
+            kind, offset, length = subbuffer_layout[name]
+            windows.append((kind, offset, length, name, 0))
+    return windows
+
+
+def find_replicated_runs(runlist, slice_info, subbuffer_layout):
+    """Maximal runs of one design over uniformly advancing windows, as fold candidates.
+
+    N consecutive entries of the same design whose buffer windows advance by one
+    constant step per argument -- the window's own length, or zero for an operand
+    every run rereads -- are one iterated run. A design is foldable only when every
+    appearance folds the same way: the rewrite is per design, and one device cannot
+    iterate two different shapes.
+    """
+    groups: list[tuple[int, int]] = []
+    start = 0
+    for i in range(1, len(runlist) + 1):
+        if i == len(runlist) or runlist[i][0] != runlist[start][0]:
+            groups.append((start, i))
+            start = i
+    candidates: dict[str, tuple[int, tuple[int, ...]]] = {}
+    spans: dict[str, list[tuple[int, int]]] = {}
+    for lo, hi in groups:
+        op_name = runlist[lo][0]
+        n = hi - lo
+        if n < 2:
+            candidates.setdefault(op_name, None)
+            spans.setdefault(op_name, []).append((lo, hi))
+            continue
+        rows = [
+            _entry_windows(slice_info, subbuffer_layout, runlist[i][1:])
+            for i in range(lo, hi)
+        ]
+        deltas: list[int] = []
+        for pos in range(len(rows[0])):
+            lengths = {row[pos][2] for row in rows}
+            steps = {rows[i + 1][pos][1] - rows[i][pos][1] for i in range(n - 1)}
+            if len(lengths) != 1 or len(steps) != 1:
+                deltas = []
+                break
+            (length,), (step,) = lengths, steps
+            if step not in (0, length):
+                deltas = []
+                break
+            deltas.append(step)
+        shape = (n, tuple(deltas)) if deltas else None
+        if op_name in candidates and candidates[op_name] != shape:
+            shape = None
+        candidates[op_name] = shape
+        spans.setdefault(op_name, []).append((lo, hi))
+    return {
+        name: (shape, spans[name])
+        for name, shape in candidates.items()
+        if shape is not None and all(hi - lo == shape[0] for lo, hi in spans[name])
+    }
+
+
+def replicate_sequence(
+    dev_op: Any, n: int, deltas_bytes: tuple[int, ...], itemsize: int
+) -> bool:
+    """Iterate a design's runtime sequence ``n`` times, one argument stride per step.
+
+    Every shim task's leading transfer dimension carries the step: it must be free
+    (extent one, stride zero) or the design already spends it, and then nothing here
+    changes. The argument types widen to the whole span.
+    """
+    with dev_op.operation.context, ir.Location.unknown():
+        seq_op = None
+        for nested in dev_op.operation.regions[0].blocks[0].operations:
+            if nested.operation.name == "aie.runtime_sequence":
+                seq_op = nested
+                break
+        if seq_op is None:
+            return False
+        block = seq_op.operation.regions[0].blocks[0]
+        if len(block.arguments) != len(deltas_bytes):
+            return False
+        bds = []
+        for op in seq_op.operation.regions[0].blocks[0].operations:
+            regions = op.operation.regions
+            for inner in regions[0].blocks[0].operations if len(regions) else ():
+                if inner.operation.name == "aie.dma_bd":
+                    sizes = list(
+                        ir.DenseI64ArrayAttr(inner.operation.attributes["static_sizes"])
+                    )
+                    strides = list(
+                        ir.DenseI64ArrayAttr(
+                            inner.operation.attributes["static_strides"]
+                        )
+                    )
+                    if len(sizes) != 4 or sizes[0] != 1 or strides[0] != 0:
+                        return False
+                    arg_index = None
+                    for i, arg in enumerate(block.arguments):
+                        if inner.operation.operands[0] == arg:
+                            arg_index = i
+                            break
+                    if arg_index is None:
+                        return False
+                    bds.append((inner.operation, sizes, strides, arg_index))
+        for op, sizes, strides, arg_index in bds:
+            sizes[0] = n
+            strides[0] = deltas_bytes[arg_index] // itemsize
+            op.attributes["static_sizes"] = ir.DenseI64ArrayAttr.get(sizes)
+            op.attributes["static_strides"] = ir.DenseI64ArrayAttr.get(strides)
+            task = op.parent
+            assert task.name == "aiex.dma_configure_task_for"
+            task.attributes["repeat_count"] = ir.IntegerAttr.get(
+                ir.IntegerType.get_signless(32), n - 1
+            )
+        for i, arg in enumerate(block.arguments):
+            if deltas_bytes[i] == 0:
+                continue
+            old_type = ir.MemRefType(arg.type)
+            new_shape = [old_type.shape[0] * n, *old_type.shape[1:]]
+            arg.set_type(ir.MemRefType.get(new_shape, old_type.element_type))
+        return True
+
+
+def fold_runlist(
+    runlist, slice_info, subbuffer_layout, folded: dict
+) -> list[tuple[str, ...]]:
+    """The runlist with each folded span replaced by its one whole-span entry.
+
+    The span entries' slice names are registered in ``slice_info`` in place, so the
+    callable resolves them like any other slice.
+    """
+    replaced: list[tuple[str, ...]] = []
+    i = 0
+    while i < len(runlist):
+        op_name, *buffer_names = runlist[i]
+        if op_name not in folded:
+            replaced.append(runlist[i])
+            i += 1
+            continue
+        (n, deltas), _ = folded[op_name]
+        windows = _entry_windows(slice_info, subbuffer_layout, tuple(buffer_names))
+        span_names = []
+        for pos, name in enumerate(buffer_names):
+            if deltas[pos] == 0:
+                span_names.append(name)
+                continue
+            _, _, length, base, start = windows[pos]
+            span_name = f"{base}[{start}:{start + n * length}]#folded"
+            slice_info[span_name] = (base, start, start + n * length)
+            span_names.append(span_name)
+        replaced.append((op_name, *span_names))
+        i += n
+    return replaced
+
+
 def needs_additional_reset(runlist: list[Any]) -> bool:
     """Whether the sequence must configure one more device than the runlist asks for.
 
@@ -161,6 +321,16 @@ def fuse_mlir(artifact: SequenceMLIRArtifact) -> None:
     operator_param_decls: dict[str, dict[str, ir.Type]] = {}
     device_ty = None
     sequence_arg_types = {}
+    # A traced sequence carries a trailing buffer no window advances over, so folding
+    # stays out of its way.
+    folded = (
+        {}
+        if artifact.trace_size
+        else find_replicated_runs(
+            artifact.runlist, artifact.slice_info, artifact.subbuffer_layout
+        )
+    )
+    fold_itemsize = np.dtype(ml_dtypes.bfloat16).itemsize
     for op_name, mlir_artifact in artifact.operator_mlir_map.items():
         mlir_module = get_child_mlir_module(mlir_artifact)
         device_ops = []
@@ -178,11 +348,22 @@ def fuse_mlir(artifact: SequenceMLIRArtifact) -> None:
                 f"got {len(device_ops)}"
             )
         device_op = device_ops[0]
+        if op_name in folded:
+            (n, deltas), _ = folded[op_name]
+            if not replicate_sequence(device_op, n, deltas, fold_itemsize):
+                del folded[op_name]
         if device_ty is None:
             device_ty = device_op.device
         device_mlir_strings[op_name] = str(device_op)
         operator_param_decls[op_name] = params_here
         sequence_arg_types[op_name] = extract_runtime_sequence_arg_types(device_op)
+    runlist = (
+        fold_runlist(
+            artifact.runlist, artifact.slice_info, artifact.subbuffer_layout, folded
+        )
+        if folded
+        else artifact.runlist
+    )
 
     # Deduplicate parameter decls across operators (same name must have the
     # same type; otherwise indices would collide in the global state table).
@@ -225,7 +406,7 @@ def fuse_mlir(artifact: SequenceMLIRArtifact) -> None:
             dev_op.sym_name = ir.StringAttr.get(op_name)
             ctx.module.body.append(dev_op)
 
-        needs_reset = needs_additional_reset(artifact.runlist)
+        needs_reset = needs_additional_reset(runlist)
         if needs_reset:
 
             @aie.device(device_ty)
@@ -252,7 +433,7 @@ def fuse_mlir(artifact: SequenceMLIRArtifact) -> None:
             if traced and (match := re.match(r"op(\d+)_", traced)):
                 traced = artifact.runlist[int(match.group(1))][0]
             consolidated_idx, trace_slots, n_args = trace_argument_layout(
-                {name: len(sequence_arg_types[name]) for name, *_ in artifact.runlist},
+                {name: len(sequence_arg_types[name]) for name, *_ in runlist},
                 trace_size,
                 traced,
             )
@@ -287,7 +468,7 @@ def fuse_mlir(artifact: SequenceMLIRArtifact) -> None:
                 # Execute operations in runlist order
                 configure_op = None
                 last_op_name = None
-                for op_name, *buffer_names in artifact.runlist:
+                for op_name, *buffer_names in runlist:
                     expected_arg_types = sequence_arg_types[op_name]
 
                     # Avoid reconfiguring altogether if the same op is called multiple times consecutively
@@ -382,6 +563,54 @@ def fuse_mlir(artifact: SequenceMLIRArtifact) -> None:
 
 # Compilation Rules
 # ##########################################################################
+
+
+class ReplicatedMLIRArtifact(MLIRArtifact):
+    """A design module with its runtime sequence iterated over a folded span."""
+
+    def __init__(
+        self,
+        filename: str,
+        source: PythonGeneratedMLIRArtifact,
+        n: int,
+        deltas_bytes: tuple[int, ...],
+    ):
+        super().__init__(filename, dependencies=[source])
+        self.source = source
+        self.n = n
+        self.deltas_bytes = deltas_bytes
+
+
+def write_replicated_mlir(artifact: ReplicatedMLIRArtifact) -> None:
+    mlir_module = get_child_mlir_module(artifact.source)
+    itemsize = np.dtype(ml_dtypes.bfloat16).itemsize
+    device_op = next(
+        op for op in mlir_module.body.operations if isinstance(op, aie.DeviceOp)
+    )
+    if not replicate_sequence(device_op, artifact.n, artifact.deltas_bytes, itemsize):
+        raise ValueError(
+            f"design {artifact.source.filename} does not fold {artifact.n} ways"
+        )
+    with open(artifact.filename, "w") as f:
+        f.write(str(mlir_module))
+
+
+class ReplicateMLIRCompilationRule(CompilationRule):
+    """Compilation rule that writes folded-span design modules."""
+
+    def matches(self, graph: CompilationArtifactGraph) -> bool:
+        return any(graph.get_worklist(ReplicatedMLIRArtifact))
+
+    def compile(self, graph: CompilationArtifactGraph) -> list[CompilationCommand]:
+        commands: list[CompilationCommand] = []
+        for artifact in graph.get_worklist(ReplicatedMLIRArtifact):
+            commands.append(
+                PythonCallbackCompilationCommand(
+                    partial(write_replicated_mlir, artifact)
+                )
+            )
+            artifact.available = True
+        return commands
 
 
 class FusePythonGeneratedMLIRCompilationRule(CompilationRule):
