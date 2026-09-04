@@ -49,7 +49,13 @@ class _SwiGLUStreamGroup(StreamGroup):
     def _per_layer(self):
         design = self._design
         gemm_blocks = design.gemm_blocks(
-            design.chosen_block(self.seq_len, self.embedding_dim, self.hidden_dim, self._dims()["npu"], self.k)
+            design.chosen_block(
+                self.seq_len,
+                self.embedding_dim,
+                self.hidden_dim,
+                self._dims()["npu"],
+                self.k,
+            )
         )
         return {
             design.GATE: (GEMM, gemm_blocks[design.GATE]),
@@ -60,7 +66,14 @@ class _SwiGLUStreamGroup(StreamGroup):
         }
 
     def _layers(self):
-        return self._design.GROUP_LAYERS[self.k][self.group_index]
+        design = self._design
+        return design.partition_layers(
+            self.seq_len,
+            self.embedding_dim,
+            self.hidden_dim,
+            self._dims()["npu"],
+            self.k,
+        )[self.group_index]
 
     def _ports(self):
         dims = (self.seq_len, self.embedding_dim, self.hidden_dim)
@@ -78,9 +91,12 @@ def _wiring(seq_len, embedding_dim, hidden_dim, k):
     produces and what none consumes. Imported lazily, so only building the operator
     needs stream-dse, not importing it.
     """
+    import aie.utils as aie_utils
+
     from iron.operators.swiglu_prefill_stream.stream_design import group_ports
 
-    boundaries = group_ports(seq_len, embedding_dim, hidden_dim, k)
+    npu = aie_utils.get_current_device().resolve().name
+    boundaries = group_ports(seq_len, embedding_dim, hidden_dim, k, npu)
     produced = {name for _, outputs in boundaries for name in outputs}
     consumed = {name for inputs, _ in boundaries for name in inputs}
     ports = [inputs + outputs for inputs, outputs in boundaries]
@@ -99,8 +115,10 @@ class SwiGLUPrefillStream(OperatorSequence):
     ``k`` is how many fused groups the block is split into: 1 keeps the whole block
     on the array at once, 2 splits after the elementwise multiply, and 5 runs layer
     by layer, each layer taking the whole array in turn as
-    :mod:`iron.operators.swiglu_prefill` does. The split is decided by the mapping's
-    fused groups, and the external buffers are the same either way.
+    :mod:`iron.operators.swiglu_prefill` does. Left ``None``, stream prices the
+    whole-chain and layer-by-layer candidates -- each by the solve the deployed
+    build runs plus its dispatch overhead -- and builds the winner. The external
+    buffers are the same either way.
 
     Runtime buffers (``get_callable().get_buffer(name)``) are named by the reference
     module: ``input``, ``w_gate``, ``w_up``, ``w_down``, ``output``. Building
@@ -118,9 +136,6 @@ class SwiGLUPrefillStream(OperatorSequence):
         share_designs=True,
     ):
         from iron.common.stream.design import trace_size
-        from iron.operators.swiglu_prefill_stream.stream_design import default_groups
-
-        k = default_groups(hidden_dim) if k is None else k
 
         ports, inputs, outputs = _wiring(seq_len, embedding_dim, hidden_dim, k)
         groups = [
@@ -135,7 +150,7 @@ class SwiGLUPrefillStream(OperatorSequence):
             for index in range(len(ports))
         ]
         super().__init__(
-            name=f"swiglu_prefill_stream_k{k}_m{seq_len}_e{embedding_dim}_h{hidden_dim}",
+            name=f"swiglu_prefill_stream_k{'auto' if k is None else k}_m{seq_len}_e{embedding_dim}_h{hidden_dim}",
             runlist=[
                 (group, *group_ports) for group, group_ports in zip(groups, ports)
             ],

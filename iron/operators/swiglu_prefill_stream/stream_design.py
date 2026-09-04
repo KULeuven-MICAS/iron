@@ -33,7 +33,12 @@ from iron.common.stream.design import (
     region_module,
 )
 from iron.common.stream.hardware import array
-from iron.common.stream.runner import design_dir, experiment_id, run_codegen
+from iron.common.stream.runner import (
+    design_dir,
+    experiment_id,
+    run_codegen,
+    run_partition_codegen,
+)
 
 try:
     from stream.ir.infeasibility import InfeasibleAllocationError
@@ -107,18 +112,23 @@ def _row_width(hidden_dim):
     return max(w for w in range(ELEMENTWISE_WIDTH, 0, -1) if hidden_dim % w == 0)
 
 
-def default_groups(hidden_dim):
-    """How many fused groups to build when the caller does not say.
+def partition_layers(seq_len, embedding_dim, hidden_dim, npu, k):
+    """The layers of each fused group: declared for an explicit ``k``, solved otherwise.
 
-    Layer by layer, always. Fusing is meant to pay for the round trips it saves with the
-    cores it gives up, but it never has: measured at embedding 512 and hidden 2048 against
-    iron/operators/swiglu_prefill, one group ties layer-by-layer at sequence 256 (1.29 ms
-    both) and loses badly once the sequence grows -- 3.96 ms against 2.44 at 1024, and 7.49
-    against 3.92 at 2048, where layer-by-layer is the only one of the two that beats the
-    hand-written operator. Fusing costs each GEMM three quarters of its columns, and the
-    weight traffic that follows outgrows the intermediates it keeps on chip.
+    With ``k=None`` the mapping declares no fused groups and stream prices the
+    candidate partitions itself -- each by the solve the deployed build runs, plus
+    the namespace's dispatch overhead -- persisting the winner in ``partition.json``
+    beside the design, the way the accepted GEMM block already is.
     """
-    return LAYER_BY_LAYER
+    if k is not None:
+        return GROUP_LAYERS[k]
+    marker = (
+        Path(design_dir(_experiment_id(seq_len, embedding_dim, hidden_dim, k)))
+        / "partition.json"
+    )
+    if not marker.exists():
+        _run_codegen(seq_len, embedding_dim, hidden_dim, npu, k)
+    return [list(group) for group in json.loads(marker.read_text())["groups"]]
 
 
 def _placements(k, hidden_dim, block):
@@ -131,9 +141,11 @@ def _placements(k, hidden_dim, block):
     tiles = gemm_blocks(block)
 
     def gemm(block):
-        return dict(zip("mkn", block), utilization=61.8, layout="default", bfp16_mmul=True)
+        return dict(
+            zip("mkn", block), utilization=61.8, layout="default", bfp16_mmul=True
+        )
 
-    if k == LAYER_BY_LAYER:
+    if k is None or k == LAYER_BY_LAYER:
         wide = elementwise(1, _row_width(hidden_dim), "contiguous")
         elementwise_kwargs = {SILU: wide, MUL: wide}
     else:
@@ -160,7 +172,10 @@ def elementwise(rows, columns, layout, bfp16_mmul=False):
 
 
 def _groups(k, hidden_dim):
-    """The fused groups. Their tiling is the kernels' granules, derived by stream."""
+    """The fused groups. Their tiling is the kernels' granules, derived by stream;
+    with no ``k`` the mapping declares none and stream solves the partition too."""
+    if k is None:
+        return []
     return [
         FusedGroup(f"Fused_Group_{index + 1}", layers)
         for index, layers in enumerate(GROUP_LAYERS[k])
@@ -171,7 +186,7 @@ def _check_shapes(seq_len, embedding_dim, hidden_dim, k):
     """Reject a problem size no compiled block can divide."""
     grid = array()
     sequence_tile, embedding_tile, hidden_tile = GEMM_BLOCKS[-1]
-    gemm_split = grid.num_columns if k == LAYER_BY_LAYER else 2
+    gemm_split = grid.num_columns if k in (None, LAYER_BY_LAYER) else 2
     if seq_len % grid.num_rows or seq_len < sequence_tile * grid.num_rows:
         raise ValueError(
             f"seq_len ({seq_len}) must be a multiple of {grid.num_rows} and at "
@@ -200,18 +215,21 @@ def workload_for(seq_len, embedding_dim, hidden_dim):
     )
 
 
-def group_ports(seq_len, embedding_dim, hidden_dim, k=1):
+def group_ports(seq_len, embedding_dim, hidden_dim, k=1, npu="npu2"):
     """Per fused group, the tensor names it takes in and hands on.
 
     These are the operator's runtime arguments, including the tensors a split
     design passes from one group to the next.
     """
     return group_boundaries(
-        workload_for(seq_len, embedding_dim, hidden_dim), GROUP_LAYERS[k]
+        workload_for(seq_len, embedding_dim, hidden_dim),
+        partition_layers(seq_len, embedding_dim, hidden_dim, npu, k),
     )
 
 
-def build_inputs(seq_len, embedding_dim, hidden_dim, output_dir, k=1, block=GEMM_BLOCKS[-1]):
+def build_inputs(
+    seq_len, embedding_dim, hidden_dim, output_dir, k=1, block=GEMM_BLOCKS[-1]
+):
     """Write the workload and mapping for one configuration; return their paths."""
     _check_shapes(seq_len, embedding_dim, hidden_dim, k)
     workload = workload_for(seq_len, embedding_dim, hidden_dim)
@@ -229,7 +247,7 @@ def build_inputs(seq_len, embedding_dim, hidden_dim, output_dir, k=1, block=GEMM
 
 
 def _experiment_id(seq_len, embedding_dim, hidden_dim, k):
-    suffix = f"_k{k}" if k > 1 else ""
+    suffix = "_kauto" if k is None else (f"_k{k}" if k > 1 else "")
     return experiment_id("swiglu", f"{seq_len}_{embedding_dim}_{hidden_dim}", suffix)
 
 
@@ -246,8 +264,35 @@ def chosen_block(seq_len, embedding_dim, hidden_dim, npu, k):
 
 
 def _run_codegen(seq_len, embedding_dim, hidden_dim, npu, k):
-    """Build with the largest block the solve accepts; the last candidate must hold."""
+    """Build with the largest block the solve accepts; the last candidate must hold.
+
+    With ``k=None`` every (partition, block) pair becomes a candidate mapping and
+    stream's priced search picks among them; the winner's block is persisted the
+    same way an explicit build's is.
+    """
     eid = _experiment_id(seq_len, embedding_dim, hidden_dim, k)
+    if k is None:
+        base = Path(design_dir(eid))
+        candidates, shapes = [], []
+        for candidate_k in (1, LAYER_BY_LAYER):
+            for block in GEMM_BLOCKS:
+                candidate_dir = (
+                    base / f"candidate_k{candidate_k}_b{'x'.join(map(str, block))}"
+                )
+                workload_path, mapping_path = build_inputs(
+                    seq_len,
+                    embedding_dim,
+                    hidden_dim,
+                    candidate_dir,
+                    k=candidate_k,
+                    block=block,
+                )
+                candidates.append(mapping_path)
+                shapes.append(block)
+        run_partition_codegen(eid, workload_path, candidates, npu)
+        chosen = json.loads((base / "partition.json").read_text())
+        _block_marker(eid).write_text(json.dumps(shapes[chosen["chosen"]]))
+        return
     for block in GEMM_BLOCKS:
         workload_path, mapping_path = build_inputs(
             seq_len, embedding_dim, hidden_dim, design_dir(eid), k=k, block=block
@@ -263,17 +308,17 @@ def _run_codegen(seq_len, embedding_dim, hidden_dim, npu, k):
         return
 
 
-def _design_paths(seq_len, embedding_dim, hidden_dim, k):
+def _design_paths(seq_len, embedding_dim, hidden_dim, k, npu="npu2"):
     return design_paths(
         design_dir(_experiment_id(seq_len, embedding_dim, hidden_dim, k)),
-        len(GROUP_LAYERS[k]),
+        len(partition_layers(seq_len, embedding_dim, hidden_dim, npu, k)),
     )
 
 
 def _group_text(group_index, *, k, seq_len, embedding_dim, hidden_dim, npu) -> str:
     return group_text(
         group_index,
-        _design_paths(seq_len, embedding_dim, hidden_dim, k),
+        _design_paths(seq_len, embedding_dim, hidden_dim, k, npu),
         lambda: _run_codegen(seq_len, embedding_dim, hidden_dim, npu, k),
     )
 

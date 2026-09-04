@@ -67,6 +67,34 @@ def design_dir(experiment_id: str) -> str:
     return os.path.join(OUTPUT_ROOT, experiment_id)
 
 
+def run_partition_codegen(
+    experiment_id: str, workload_path, candidate_mappings, npu: str
+) -> None:
+    """Price the candidate partitions by stream's own solves, then build the winner.
+
+    Each candidate is a mapping declaring one partition (the operator hands in its
+    kernel variants per partition); stream adds its dispatch-overhead price and the
+    record lands in ``partition.json`` in the design directory.
+    """
+    from stream.api import choose_fusion_partition
+    from stream.opt.solver import SolverBackend
+    from zigzag.mapping.temporal_mapping import TemporalMappingType
+
+    chosen = choose_fusion_partition(
+        hardware=ACCELERATOR,
+        workload=str(workload_path),
+        mapping=None,
+        output_path=os.path.join(OUTPUT_ROOT, experiment_id),
+        temporal_mapping_type=TemporalMappingType.UNEVEN,
+        nb_cols_to_use=array().num_columns,
+        backend=SolverBackend[BACKEND.upper()].value,
+        constraint_selection=None,
+        kernels=None,
+        candidates=[str(path) for path in candidate_mappings],
+    )
+    run_codegen(experiment_id, workload_path, chosen, npu)
+
+
 def run_codegen(experiment_id: str, workload_path, mapping_path, npu: str) -> None:
     """Run stream-dse's constraint optimization and code generation once.
 
