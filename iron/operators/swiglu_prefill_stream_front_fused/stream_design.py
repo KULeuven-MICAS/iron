@@ -26,8 +26,6 @@ from pathlib import Path
 
 import stream
 import torch
-from fontTools.afmLib import kernRE
-from fontTools.feaLib.ast import FontRevisionStatement
 from xdsl.ir.affine import AffineMap
 from stream.api import optimize_allocation_co
 from stream.parser.onnx.operator_parser import OnnxOperatorParser
@@ -42,17 +40,23 @@ from iron.common.stream.mapping import (
 )
 from iron.common.stream.workload import export_workload
 from iron.operators.swiglu_prefill_stream_front_fused import reference
-from iron.operators.swiglu_prefill_stream_front_fused.front_kernel import SwigluFrontFusedKernel
+from iron.operators.swiglu_prefill_stream_front_fused.front_kernel import (
+    GemmJoinedKernel,
+    SwigluFrontFusedKernel,
+)
 from iron.operators.swiglu_prefill_stream_front_fused.reference import swiglu_module
 
 # Hardware description for the whole-array Strix (npu2) target, shipped as package
-# data inside the installed stream package.
+# data inside the installed stream package. The variant with 512 KB memory tiles
+# (what the hardware has) lets the allocator keep the input resident next to the
+# output join's staging buffer; the 256 KB model made it re-fetch the input from
+# DDR for every hidden block.
 ACCELERATOR = os.path.join(
     os.path.dirname(stream.__file__),
     "inputs",
     "aie",
     "hardware",
-    "whole_array_strix.yaml",
+    "whole_array_strix_512.yaml",
 )
 
 BACKEND = "gurobi"
@@ -79,22 +83,68 @@ GROUP_LAYERS = [[NAME_FRONT, NAME_DOWN]]
 
 
 class SwigluFrontFusedParser(OnnxOperatorParser):
+    """``X[m, k] x W[n_h, n_l, k, 2, n_i] -> Y[m, n_h, n_l, n_i]``.
+
+    Iteration space ``(m, k, t, n_h, n_l, n_i)``: D0 sequence, D1 contraction, D2
+    gate/up, D3 hidden-block group, D4 block within the group, D5 position in the
+    block. Every operand is a plain projection of it, which is what makes the
+    blocked weight layout expressible.
+    """
+
     def generate_node(self, name_to_tensor_dict: dict[str, Tensor]) -> ComputationNode:
         inputs = tuple(name_to_tensor_dict[name] for name in self.node.input)
-
-        # check input and shape validness
         assert len(inputs) == 2
         input_data, input_weight = inputs
-        assert len(input_data.shape) == 2 and len(input_weight.shape) == 3
+        assert len(input_data.shape) == 2 and len(input_weight.shape) == 5
         dm, dk = input_data.shape
-        wk, two, wn = input_weight.shape
+        wn_h, wn_l, wk, two, wn_i = input_weight.shape
         assert dk == wk
         assert two == 2
 
         mappings = (
-            AffineMap.from_callable(lambda m, k, t, n: (m, k)),
-            AffineMap.from_callable(lambda m, k, t, n: (k, t, n)),
-            AffineMap.from_callable(lambda m, k, t, n: (m, n)),
+            AffineMap.from_callable(lambda m, k, t, n_h, n_l, n_i: (m, k)),
+            AffineMap.from_callable(
+                lambda m, k, t, n_h, n_l, n_i: (n_h, n_l, k, t, n_i)
+            ),
+            AffineMap.from_callable(lambda m, k, t, n_h, n_l, n_i: (m, n_h, n_l, n_i)),
+        )
+        return ComputationNode(
+            type=self.node.op_type,
+            name=self.node.name,
+            inputs=inputs,
+            outputs=self.get_output_tensors(),
+            operand_mapping=mappings,
+        )
+
+
+class GemmBlockedParser(OnnxOperatorParser):
+    """``X[m, k_h, k_l, k_i] x W[j, n_t, k_h, k_l, k_i, n_i] -> Y[m, n_t, j, n_i]``.
+
+    Iteration space ``(m, k_l, k_h, k_i, n_t, j, n_i)``: D0 sequence, D1
+    contraction block, D2 the block's group, D3 position in the block, D4 output
+    tile, D5 output group, D6 position in the tile. The contraction group is the
+    innermost loop over blocks, so the two groups' blocks -- produced by two front
+    cores at once -- are consumed as they come; the output group is what the down
+    cores are split over.
+    """
+
+    def generate_node(self, name_to_tensor_dict: dict[str, Tensor]) -> ComputationNode:
+        inputs = tuple(name_to_tensor_dict[name] for name in self.node.input)
+        assert len(inputs) == 2
+        input_data, input_weight = inputs
+        assert len(input_data.shape) == 4 and len(input_weight.shape) == 6
+        assert input_data.shape[1:] == input_weight.shape[2:5]
+
+        mappings = (
+            AffineMap.from_callable(
+                lambda m, k_l, k_h, k_i, n_t, j, n_i: (m, k_h, k_l, k_i)
+            ),
+            AffineMap.from_callable(
+                lambda m, k_l, k_h, k_i, n_t, j, n_i: (j, n_t, k_h, k_l, k_i, n_i)
+            ),
+            AffineMap.from_callable(
+                lambda m, k_l, k_h, k_i, n_t, j, n_i: (m, n_t, j, n_i)
+            ),
         )
         return ComputationNode(
             type=self.node.op_type,
@@ -106,9 +156,15 @@ class SwigluFrontFusedParser(OnnxOperatorParser):
 
 
 def tiles_for():
-    """The kernel tile, as (sequence, embedding, hidden), for ``k`` fused groups."""
-    # TODO tune this
-    return (16, 64, 64)
+    """The kernel tile, as (sequence, embedding, hidden).
+
+    The hidden tile is the hidden block of the weight layout: a kernel call takes
+    exactly one block, so the block index is an extent-one dimension of its tiles.
+    The sequence tile is what a front core holds: with the front split over the
+    sequence and over the hidden-block groups, it is ``seq_len * HIDDEN_SPLIT /
+    cores`` rows, so that every weight is streamed exactly once.
+    """
+    return (32, 64, reference.HIDDEN_BLOCK)
 
 
 def gemm_tiles():
@@ -116,7 +172,7 @@ def gemm_tiles():
     sequence, embedding, hidden = tiles_for()
     return {
         NAME_FRONT: (sequence, embedding, hidden),
-        NAME_DOWN: (sequence, hidden, embedding),
+        NAME_DOWN: (sequence, hidden, reference.OUTPUT_BLOCK),
     }
 
 
@@ -132,49 +188,65 @@ def array() -> ComputeArray:
 
 
 def _placements(embedding_dim):
-    """Where each layer runs: disjoint columns, D0 split over every core in them."""
+    """Where each layer runs.
+
+    The layers take alternating columns, so every hand-off is a hop to the
+    neighbour. The front is split over the sequence (D0) and over the hidden-block
+    groups (D3): each group of cores then needs only its own half of the weights,
+    which halves what its broadcast stream carries -- the stream that bounded the
+    design when every core needed all of them. The down is split over the
+    sequence (D0) and its output (D4); each down core takes both groups' blocks
+    of its rows through a memory-tile join and holds its half of the output.
+    """
     grid = array()
-    sequence_tile, _, hidden_tile = tiles_for()
     tiles = gemm_tiles()
 
     def gemm(tiles):
-        # TODO probably not correct?
         return dict(
             zip("mkn", tiles), utilization=61.8, layout="default", bfp16_mmul=True
         )
 
+    cores = grid.num_rows * COLUMNS_PER_LAYER
+    split = reference.HIDDEN_SPLIT
+    assert cores % split == 0
+    # Columns in ascending order: stream-dse's dispatch assumes the allocation is
+    # sorted by (column, row). The first half of the cores (the first two columns
+    # of a layer) is hidden-block group 0 / output half 0, the second half group 1.
     every_other = tuple(range(0, 2 * COLUMNS_PER_LAYER, 2))
     columns = {
         NAME_FRONT: every_other,
         NAME_DOWN: tuple(c + 1 for c in every_other),
     }
-    cores = grid.num_rows * COLUMNS_PER_LAYER
     return {
         NAME_FRONT: Placement(
             columns[NAME_FRONT],
-            (("D0", cores),),
+            (("D0", cores // split), ("D3", split)),
             dict(gemm(tiles[NAME_FRONT]), full_k=embedding_dim),
         ),
         NAME_DOWN: Placement(
-            columns[NAME_DOWN], (("D0", cores),), gemm(tiles[NAME_DOWN])
+            columns[NAME_DOWN],
+            (("D0", cores // split), ("D5", reference.OUTPUT_SPLIT)),
+            gemm(tiles[NAME_DOWN]),
         ),
     }
 
 
 def _groups():
-    """The fused groups, each with the intra-core tiling of its leading GEMM.
+    """The fused group, with the intra-core tiling of its layers.
 
-    Splitting makes stream-dse emit one design per group, which IRON then deploys
-    as a single full ELF. D0 is the sequence dimension, D1 the contraction and D2
-    the output dimension.
+    The front's contraction (D1) and hidden-block index (D4) and the down's
+    output tile (D4) are tiled to the kernels' tiles; the sequence tile (front
+    D0) is what a core holds. The hidden-block group (front D3, down D2) is split
+    over cores and untiled within one, so the down iterates it as its innermost
+    loop over blocks.
     """
     sequence_tile, embedding_tile, hidden_tile = tiles_for()
-    # TODO what does this mean exactly? why does the order matter here?
+    assert hidden_tile == reference.HIDDEN_BLOCK
     tiling = [
         [
             (NAME_FRONT, "D1", embedding_tile),
-            (NAME_DOWN, "D2", embedding_tile),
-            (NAME_FRONT, "D3", hidden_tile),
+            (NAME_DOWN, "D4", 1),
+            (NAME_FRONT, "D4", 1),
             (NAME_FRONT, "D0", sequence_tile),
         ]
     ]
@@ -188,22 +260,22 @@ def _check_shapes(seq_len, embedding_dim, hidden_dim):
     """Reject a problem size the placement and the kernel tiles cannot divide."""
     grid = array()
     sequence_tile, embedding_tile, hidden_tile = tiles_for()
-    gemm_split = 2
-    cores = grid.num_rows * COLUMNS_PER_LAYER
-    if seq_len % cores or seq_len < sequence_tile * cores:
+    split = reference.HIDDEN_SPLIT
+    sequence_cores = grid.num_rows * COLUMNS_PER_LAYER // split
+    if seq_len != sequence_tile * sequence_cores:
         raise ValueError(
-            f"seq_len ({seq_len}) must be a multiple of {cores} and at "
-            f"least {sequence_tile * cores}"
+            f"seq_len ({seq_len}) must be {sequence_tile * sequence_cores}: "
+            f"{sequence_cores} cores of {sequence_tile} rows each"
         )
-    if embedding_dim % (embedding_tile * gemm_split):
+    output_split = reference.OUTPUT_SPLIT * reference.OUTPUT_BLOCK
+    if embedding_dim % embedding_tile or embedding_dim % output_split:
         raise ValueError(
             f"embedding_dim ({embedding_dim}) must be a multiple of "
-            f"{embedding_tile * gemm_split}"
+            f"{embedding_tile} and of {output_split}"
         )
-    if hidden_dim % (hidden_tile * gemm_split):
+    if hidden_dim % (hidden_tile * split):
         raise ValueError(
-            f"hidden_dim ({hidden_dim}) must be a multiple of "
-            f"{hidden_tile * gemm_split}"
+            f"hidden_dim ({hidden_dim}) must be a multiple of {hidden_tile * split}"
         )
 
 
@@ -258,7 +330,7 @@ def _experiment_id(seq_len, embedding_dim, hidden_dim):
         elif trace_core_lock_requests():
             trace_suffix += "-locks"
     return (
-        f"{hardware}-swiglu_fused_front{trace_suffix}_{seq_len}_{embedding_dim}_{hidden_dim}"
+        f"{hardware}-swiglu_fused_front_split{trace_suffix}_{seq_len}_{embedding_dim}_{hidden_dim}"
         f"-{grid.num_rows}_row_{grid.num_columns}_col"
     )
 
@@ -337,9 +409,7 @@ def _detailed_core_trace(mlir_text: str) -> str:
                     else "INSTR_LOCK_RELEASE_REQ" if none_index == 1 else "NONE"
                 )
             else:
-                replacement = (
-                    "INSTR_LOCK_ACQUIRE_REQ" if none_index == 0 else "NONE"
-                )
+                replacement = "INSTR_LOCK_ACQUIRE_REQ" if none_index == 0 else "NONE"
             none_index += 1
             return f'#aie.trace_event<"{replacement}">'
 
@@ -371,6 +441,7 @@ def _run_codegen(seq_len, embedding_dim, hidden_dim, npu):
     from stream.parser.onnx.model import register_onnx_parser
 
     register_onnx_parser("SwigluFrontFused", SwigluFrontFusedParser)
+    register_onnx_parser("GemmBlocked", GemmBlockedParser)
 
     grid = array()
     experiment_id = _experiment_id(seq_len, embedding_dim, hidden_dim)
@@ -381,6 +452,23 @@ def _run_codegen(seq_len, embedding_dim, hidden_dim, npu):
         os.path.join(OUTPUT_ROOT, experiment_id),
     )
 
+    # The input is held in the memory tiles for the whole run and replayed to the
+    # cores once per hidden block (stream-dse's memtile replay), which the
+    # allocator only considers when told to.
+    previous = os.environ.get("STREAM_MEMTILE_REPLAY")
+    os.environ["STREAM_MEMTILE_REPLAY"] = "1"
+    try:
+        _optimize(npu, experiment_id, workload_path, mapping_path, grid)
+    finally:
+        if previous is None:
+            del os.environ["STREAM_MEMTILE_REPLAY"]
+        else:
+            os.environ["STREAM_MEMTILE_REPLAY"] = previous
+
+
+def _optimize(npu, experiment_id, workload_path, mapping_path, grid):
+    """Run stream-dse's allocation and code generation."""
+
     def front_fused_kernel(
         m: int,
         k: int,
@@ -390,10 +478,17 @@ def _run_codegen(seq_len, embedding_dim, hidden_dim, npu):
         bfp16_mmul: bool,
         full_k: int,
     ):
-        # TODO what is the point of utilization and these other extra params?
         del layout, bfp16_mmul
         return SwigluFrontFusedKernel(
             m=m, k=k, n=n, full_k=full_k, utilization=utilization
+        )
+
+    def gemm_joined_kernel(
+        m: int, k: int, n: int, utilization: float, layout: str, bfp16_mmul: bool
+    ):
+        del layout, bfp16_mmul
+        return GemmJoinedKernel(
+            m=m, k=k, n=n, utilization=utilization, joined=reference.HIDDEN_SPLIT
         )
 
     optimize_allocation_co(
@@ -409,7 +504,10 @@ def _run_codegen(seq_len, embedding_dim, hidden_dim, npu):
         nb_cols_to_use=grid.num_columns,
         npu=npu,
         backend=BACKEND,
-        kernels={"swiglu_fused_front": front_fused_kernel},
+        kernels={
+            "swiglu_fused_front": front_fused_kernel,
+            "gemm_joined": gemm_joined_kernel,
+        },
     )
 
 
@@ -550,9 +648,7 @@ def group_digest(group_index, **dims) -> str:
     return hashlib.sha256(_group_text(group_index, **dims).encode()).hexdigest()
 
 
-def load_group(
-        group_index, func_prefix="", *, seq_len, embedding_dim, hidden_dim, npu
-):
+def load_group(group_index, func_prefix="", *, seq_len, embedding_dim, hidden_dim, npu):
     """Generate the ``k``-group design once and return one group's aie module.
 
     ``group_index`` selects the group, in the order :data:`GROUP_LAYERS` lists them.

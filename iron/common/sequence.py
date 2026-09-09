@@ -736,6 +736,7 @@ class SequenceXclbinCallable(_PerBufferCallable):
         dispatch = self._dispatch
         combined_xclbin_path = dispatch.combined_xclbin.filename
         self._op_callable_map = {}  # id(op) -> NPUKernel
+        self._handles = {}  # id(NPUKernel) -> loaded runtime handle
         for op_id, xclbin in dispatch.op_xclbin_map.items():
             self._op_callable_map[op_id] = NPUKernel(
                 xclbin_path=combined_xclbin_path,
@@ -760,7 +761,18 @@ class SequenceXclbinCallable(_PerBufferCallable):
             self._run_step(step_idx, kernel, args, step)
 
     def _run_step(self, step_idx, kernel, args, step):
-        kernel(*args)
+        if kernel.trace_config is not None:
+            # NPUKernel's own path post-processes the trace buffers per run.
+            kernel(*args)
+            return
+        # Dispatch on a handle loaded once rather than re-resolving the kernel in
+        # the runtime's cache on every call, which costs tens of microseconds per
+        # step. A handle evicted from the cache is reloaded.
+        handle = self._handles.get(id(kernel))
+        if handle is None or not getattr(handle, "_is_valid", True):
+            handle = aie_utils.DefaultNPURuntime.load(kernel)
+            self._handles[id(kernel)] = handle
+        aie_utils.DefaultNPURuntime.run(handle, args)
 
 
 def _reshape_for_spec(flat_tensor, spec):

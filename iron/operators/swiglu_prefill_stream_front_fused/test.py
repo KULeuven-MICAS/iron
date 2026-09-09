@@ -26,6 +26,8 @@ from iron.operators.swiglu_prefill_stream_front_fused.reference import (
     NAME_INPUT,
     NAME_OUTPUT,
     NAME_WEIGHTS,
+    block_down_weights,
+    block_front_weights,
 )
 from iron.common.test_utils import verify_buffer
 
@@ -39,14 +41,14 @@ TIMED_RUNS = 3
 def _staged(operator, golden_ref):
     """A callable with its inputs staged.
 
-    Inputs are named by the golden reference, and the design consumes gate/up weights
-    packed along their new middle dimension.
+    Inputs are named by the golden reference, and the design consumes the weights
+    blocked along the hidden dimension (see the reference module).
     """
     run = operator.get_callable()
     values = {
         NAME_INPUT: golden_ref[NAME_INPUT],
-        "w_front": torch.stack((golden_ref["w_gate"], golden_ref["w_up"]), dim=1),
-        "w_down": golden_ref["w_down"],
+        "w_front": block_front_weights(golden_ref["w_gate"], golden_ref["w_up"]),
+        "w_down": block_down_weights(golden_ref["w_down"]),
     }
     for name in (NAME_INPUT, *NAME_WEIGHTS):
         buffer = run.get_buffer(name)

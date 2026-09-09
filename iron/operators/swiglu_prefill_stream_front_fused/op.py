@@ -14,8 +14,11 @@ from iron.common import (
 )
 from iron.common.device_utils import get_kernel_dir
 from iron.common.sequence import OperatorSequence
-from iron.common.stream.ops import ELTWISE_MUL, GEMM, SILU, SWIGLU_FUSED_FRONT
+from iron.common.stream.ops import GEMM_JOINED, SWIGLU_FUSED_FRONT
 from iron.operators.swiglu_prefill_stream_front_fused.stream_design import trace_size
+
+# aiecc flags every group's design is compiled with, in either dispatch mode.
+EXTRA_FLAGS = ("--dynamic-objFifos",)
 
 
 @dataclass
@@ -66,7 +69,7 @@ class _SwiGLUStreamGroupFrontFused(MLIROperator):
         gemm_tiles = design.gemm_tiles()
         per_layer = {
             design.NAME_FRONT: (SWIGLU_FUSED_FRONT, gemm_tiles[design.NAME_FRONT]),
-            design.NAME_DOWN: (GEMM, gemm_tiles[design.NAME_DOWN]),
+            design.NAME_DOWN: (GEMM_JOINED, gemm_tiles[design.NAME_DOWN]),
         }
         # The front kernel reduces across calls, so its object depends on the whole
         # contraction and not just its tile of it.
@@ -94,6 +97,13 @@ class _SwiGLUStreamGroupFrontFused(MLIROperator):
             npu=aie_utils.get_current_device().resolve().name,
         )
 
+    def get_artifacts(self, prefix: str = ""):
+        """Standalone xclbin artifacts, built with the same flags the fused ELF uses."""
+        xclbin, insts = super().get_artifacts(prefix)
+        for artifact in (xclbin, insts):
+            artifact.extra_flags = list(artifact.extra_flags) + list(EXTRA_FLAGS)
+        return xclbin, insts
+
     def get_arg_spec(self):
         """The group's runtime arguments, shaped by the exported graph.
 
@@ -116,7 +126,9 @@ def _wiring(seq_len, embedding_dim, hidden_dim):
     produces and what none consumes. Imported lazily, so only building the operator
     needs stream-dse, not importing it.
     """
-    from iron.operators.swiglu_prefill_stream_front_fused.stream_design import group_ports
+    from iron.operators.swiglu_prefill_stream_front_fused.stream_design import (
+        group_ports,
+    )
 
     boundaries = group_ports(seq_len, embedding_dim, hidden_dim)
     produced = {name for _, outputs in boundaries for name in outputs}
@@ -167,8 +179,14 @@ class SwiGLUPrefillStreamFrontFused(OperatorSequence):
             ],
             input_args=inputs,
             output_args=outputs,
-            extra_flags=["--dynamic-objFifos"],
+            extra_flags=list(EXTRA_FLAGS),
             trace_size=trace_size(),
             share_designs=share_designs,
+            # A single group is one design: dispatching it as a plain xclbin
+            # configures the array once at load, where the full-ELF sequence
+            # reconfigures and resets all 48 tiles on every run -- measured at
+            # ~370 us against ~340 us of array time at seq 256. Tracing needs the
+            # ELF flow (its trace buffers are sequence arguments), so it keeps it.
+            dispatch="separate" if len(ports) == 1 and not trace_size() else "auto",
             context=context,
         )

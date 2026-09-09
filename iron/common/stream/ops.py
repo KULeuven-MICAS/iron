@@ -29,6 +29,7 @@ from onnxscript.values import Op, Opset
 
 from iron.common.layout import Stride, TiledStride, TiledStridedLayout, tiled_2d
 from iron.operators.swiglu_prefill_stream_front_fused.reference import (
+    onnx_gemm_blocked,
     onnx_swiglu_front_fused,
 )
 
@@ -151,7 +152,41 @@ class StreamKernel:
         ]
 
 
+def _gemm_join_artifacts(base_dir, kernel_dir, m: int, k: int, n: int):
+    """``mm_join.cc``: ``mm.cc`` plus an entry point over a joined ``A`` operand."""
+    from iron.common.compilation import KernelObjectArtifact, SourceArtifact
+
+    suffix = f"{m}_{k}_{n}"
+    return [
+        KernelObjectArtifact(
+            f"mm_join_{suffix}.o",
+            dependencies=[
+                SourceArtifact(base_dir / "aie_kernels" / kernel_dir / "mm_join.cc"),
+                SourceArtifact(base_dir / "aie_kernels" / kernel_dir / "mm.cc"),
+            ],
+            extra_flags=[
+                f"-DDIM_M={m}",
+                f"-DDIM_K={k}",
+                f"-DDIM_N={n}",
+                "-Dbf16_bf16_ONLY",
+                "-DAIE_API_EMULATE_BFLOAT16_MMUL_WITH_BFP16",
+                "-DROUND_CONV_EVEN",
+            ],
+            rename_symbols={
+                "matmul_bf16_bf16_join": f"matmul_bf16_bf16_join_{suffix}",
+                "matmul_bf16_bf16": f"matmul_bf16_bf16_{suffix}",
+                "zero_bf16": f"zero_bf16_{suffix}",
+            },
+        )
+    ]
+
+
 GEMM = StreamKernel(key="gemm", layouts=gemm_layouts, artifacts=_gemm_artifacts)
+# ``mm.cc`` over a blocked contraction whose blocks several producers hand over
+# through a memory-tile join (``A[joined, m, k_h, k_l, k_i]``, ``B[k_h, k_l, k_i, n]``).
+GEMM_JOINED = StreamKernel(
+    key="gemm_joined", layouts=gemm_layouts, artifacts=_gemm_join_artifacts
+)
 SILU = StreamKernel(key="silu", layouts=lambda: elementwise_layouts(2), source="silu")
 ELTWISE_MUL = StreamKernel(
     key="eltwise_mul",
@@ -259,6 +294,9 @@ TORCH_OPS: dict[Callable, StreamOp] = {
     torch.ops.aten.mul.Tensor: StreamOp("Mul", ELTWISE_MUL, _to_mul),
     torch.ops.custom.swiglu_fused_front.default: StreamOp(
         "SwigluFrontFused", SWIGLU_FUSED_FRONT, onnx_swiglu_front_fused
+    ),
+    torch.ops.custom.gemm_blocked.default: StreamOp(
+        "GemmBlocked", GEMM_JOINED, onnx_gemm_blocked
     ),
 }
 
