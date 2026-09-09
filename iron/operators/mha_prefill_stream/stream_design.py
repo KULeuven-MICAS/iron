@@ -275,10 +275,10 @@ def _check_shapes(seq_len, d_head, k, flash=False, cfg=None):
                 f"mha.cc's flash kernels reuse the score GEMM's compiled block, which "
                 f"holds only when d_head is {FLASH_BLOCK}, not {d_head}"
             )
-        if cfg.flash_query % 16 or cfg.flash_query < FLASH_BLOCK:
+        if cfg.flash_query % 16 or cfg.flash_query < 16:
             raise ValueError(
-                f"the query block is the GEMM's DIM_M and must be a multiple of 16 no "
-                f"smaller than the key block, not {cfg.flash_query}"
+                f"the query block is the GEMM's DIM_M and must be a multiple of 16, "
+                f"not {cfg.flash_query}"
             )
         resident = (
             BYTES_PER_ELEMENT

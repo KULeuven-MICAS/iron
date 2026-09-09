@@ -106,7 +106,11 @@ void matmul_PV(bfloat16 *Q,
 
     ::aie::set_rounding(ROUNDING_MODE);
 
-    if (idx_buffer[0] > idx_buffer[1]) {
+    // Skip a key block strictly above the causal diagonal for the whole query block, in
+    // global positions (query block B_q wide, key block FLASH_TILE=64). Must match
+    // partial_softmax_body's skip, or the online rescale falls out of step when the query
+    // block is finer than the key block.
+    if (idx_buffer[1] * B_q + B_q <= idx_buffer[0] * 64) {
         return;
     }
 
@@ -116,7 +120,7 @@ void matmul_PV(bfloat16 *Q,
     // -inf
     using Vec8bf16 = aie::vector<bfloat16, 8>;
     if (first_iter != 0) {
-        for (int32_t l = 0; l < 8; l++) {
+        for (int32_t l = 0; l < B_q / 8; l++) {
             // Load 8 scale values at once for the current l iteration
             Vec8bf16 scale_row = aie::load_v<8>(scale_buffer + 3 * B_q + l * 8);
 
@@ -142,9 +146,11 @@ void rescale_O(bfloat16 *O, bfloat16 *scale_buffer, int32_t B_q, int32_t *idx_bu
 
     ::aie::set_rounding(ROUNDING_MODE);
 
-    for (int32_t i = 0; i < B_q; i += VECTOR_LENGTH) {
-        using Vec64bf16 = aie::vector<bfloat16, VECTOR_LENGTH>;
-        Vec64bf16 l_vec = aie::load_v<VECTOR_LENGTH>(scale_buffer + 2 * B_q + i);
+    // The scale segment is B_q long; a finer query block makes B_q < VECTOR_LENGTH, so
+    // invert it in MAC-group (8) chunks that divide any query block rather than one
+    // VECTOR_LENGTH load that would run off the end of the segment.
+    for (int32_t i = 0; i < B_q; i += 8) {
+        aie::vector<bfloat16, 8> l_vec = aie::load_v<8>(scale_buffer + 2 * B_q + i);
         l_vec = aie::inv(l_vec);
         aie::store_v(scale_buffer + 2 * B_q + i, l_vec);
     }
@@ -154,7 +160,7 @@ void rescale_O(bfloat16 *O, bfloat16 *scale_buffer, int32_t B_q, int32_t *idx_bu
     // VJUNG: Need to scale depending on the data layout at the output of GEMM
     // VJUNG: Scale O_{i} by 1/l_{i}
     using Vec8bf16 = aie::vector<bfloat16, 8>;
-    for (int32_t l = 0; l < 8; l++) {
+    for (int32_t l = 0; l < B_q / 8; l++) {
         // Load 8 scale values at once for the current l iteration
         using Vec8bf16 = aie::vector<bfloat16, 8>;
         Vec8bf16 scale_row = aie::load_v<8>(scale_buffer + 2 * B_q + l * 8);
@@ -183,13 +189,19 @@ static inline void gather_group(const bfloat16 *A,
                                 int32_t first,
                                 int32_t valid_q_rows,
                                 int32_t valid_kv_cols,
-                                int32_t diagonal)
+                                int32_t diag_offset)
 {
     const int32_t tile = MAC_TILE * MAC_TILE;
     const bfloat16 *base = A + (first / MAC_TILE) * tile * (B_kv / MAC_TILE);
     for (int32_t k = 0; k < MAC_TILE; k++) {
         const int32_t row = first + k;
-        int32_t keep = diagonal ? row + 1 : B_kv;
+        // Causal keep in global positions: block-local query row `row` attends keys whose
+        // block-local column is < row + diag_offset + 1.
+        int32_t keep = row + diag_offset + 1;
+        if (keep < 0)
+            keep = 0;
+        if (keep > B_kv)
+            keep = B_kv;
         if (keep > valid_kv_cols) {
             keep = valid_kv_cols;
         }
@@ -242,8 +254,13 @@ static void partial_softmax_body(bfloat16 *A,
     int32_t q_block_idx = idx_buffer[1];
     int32_t kv_block_idx = idx_buffer[0];
 
-    // Causal full mask: skip blocks strictly above diagonal
-    if (kv_block_idx > q_block_idx) {
+    // Causal diagonal in GLOBAL positions, so a query block finer than the key block still
+    // masks at the right column. Query-local row i (global row q_block_idx*B_q + i) attends
+    // a key whose block-local column j satisfies j <= diag_offset + i.
+    const int32_t diag_offset = q_block_idx * B_q - kv_block_idx * B_kv;
+
+    // The whole key block sits strictly above the diagonal for every query row here.
+    if (diag_offset + B_q - 1 < 0) {
         zero_bf16(P);
         return;
     }
@@ -300,10 +317,15 @@ static void partial_softmax_body(bfloat16 *A,
         // vector store this used to try could never fire -- its tail began at i + 1 and
         // needed VECTOR_LENGTH more columns -- and the whole triangle went out one
         // element at a time, 2016 scalar stores for a 64x64 block.
-        if (kv_block_idx == q_block_idx) {
+        // Mask only where this key block straddles the diagonal; one fully at or below it
+        // (diag_offset >= B_kv - 1) keeps every column, one fully above was skipped already.
+        if (diag_offset < B_kv - 1) {
             const bfloat16 lowest = std::numeric_limits<bfloat16>::lowest();
             for (int32_t i = 0; i < valid_q_rows; i++) {
-                const uint64_t upper = i + 1 >= VECTOR_LENGTH ? 0 : ~((1ULL << (i + 1)) - 1);
+                int32_t keep = diag_offset + i + 1;
+                if (keep < 0)
+                    keep = 0;
+                const uint64_t upper = keep >= VECTOR_LENGTH ? 0 : ~((1ULL << keep) - 1);
                 bfloat16 *row = A + i * B_kv;
                 aie::store_v(row,
                              aie::select(aie::load_v<VECTOR_LENGTH>(row),
@@ -319,11 +341,10 @@ static void partial_softmax_body(bfloat16 *A,
         // One group of rows in flight, which is 1 KB rather than a second block.
         alignas(64) static bfloat16 rows[MAC_TILE * VECTOR_LENGTH];
         alignas(64) static bfloat16 probs[MAC_TILE * VECTOR_LENGTH];
-        const int32_t diagonal = kv_block_idx == q_block_idx;
         for (int32_t first = 0; first < valid_q_rows; first += MAC_TILE) {
             bfloat16 *in = A + B_kv * first;
             if (tiled & TILED_IN) {
-                gather_group(A, rows, B_kv, first, valid_q_rows, valid_kv_cols, diagonal);
+                gather_group(A, rows, B_kv, first, valid_q_rows, valid_kv_cols, diag_offset);
                 in = rows;
             }
             bfloat16 *out = (tiled & TILED_OUT) ? probs : P + B_kv * first;

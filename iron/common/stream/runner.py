@@ -52,6 +52,10 @@ def experiment_id(family: str, shape: str, suffix: str = "") -> str:
     if os.environ.get("STREAM_ABLATE_REPLAY"):
         # The ablation arm without memory-tile replay is a different design too.
         suffix += "_noreplay"
+    if wsm := os.environ.get("STREAM_WIDE_SOFTMAX"):
+        # Widening the bottleneck stage over a spare row is a different placement, and each
+        # handover mode is a different design, so none may be served the cached balanced one.
+        suffix += f"_widesm{wsm}"
     if trace_size():
         # The buffer size is compiled into the runtime sequence, so a design
         # generated for one size cannot serve another; same for which group and tiles.
