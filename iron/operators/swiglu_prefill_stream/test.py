@@ -15,15 +15,6 @@ pytest.importorskip(
     "stream", reason="stream-dse not installed (see requirements_stream.txt)"
 )
 
-# stream-dse's codegen emits `!aie.objectfifosubview`, which mlir-aie removed in
-# Xilinx/mlir-aie#3553. Every wheel carrying the trace slice API this branch needs is
-# newer than that removal. Revert this commit once a stream-dse release targets a
-# post-#3553 mlir-aie.
-pytest.skip(
-    "stream-dse codegen does not parse against the pinned mlir-aie",
-    allow_module_level=True,
-)
-
 from iron.operators.swiglu_prefill_stream.op import SwiGLUPrefillStream
 
 # The operator's design is generated from this module; the values it is checked
@@ -35,9 +26,9 @@ from iron.common.test_utils import verify_buffer
 # The MILP-feasible shape on the whole-array Strix (npu2) target.
 SEQ_LEN, EMBEDDING_DIM, HIDDEN_DIM = 256, 512, 2048
 
-# Fused groups to deploy the block as: one design, a front end plus the down
-# projection, or one design per layer.
-FUSION_GROUPS = [1, 2, 5]
+# Fused groups to deploy the block as: the partition stream prices cheapest, one
+# design, a front end plus the down projection, or one design per layer.
+FUSION_GROUPS = [None, 1, 2, 5]
 
 # Timed dispatches per test; the reported latency is the fastest of them.
 TIMED_RUNS = 3

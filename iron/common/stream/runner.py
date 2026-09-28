@@ -1,0 +1,101 @@
+# SPDX-FileCopyrightText: Copyright (C) 2026 KU Leuven (MICAS). All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+"""The one path from an operator's exported workload and emitted mapping to a generated design.
+
+An operator contributes its family name, its shape string and the knobs that distinguish its
+designs; the accelerator, solver, output root and design-cache key are chosen here.
+"""
+
+import os
+
+import stream
+
+from iron.common.stream.design import stream_revision, trace_size, trace_tiles
+from iron.common.stream.hardware import array
+from iron.common.stream.kernel_library import library
+from iron.common.stream.kernel_library import revision as library_revision
+
+ACCELERATOR = os.path.join(
+    os.path.dirname(stream.__file__),
+    "inputs",
+    "aie",
+    "hardware",
+    "whole_array_strix.yaml",
+)
+BACKEND = os.environ.get("STREAM_BACKEND", "ortools_gscip")
+OUTPUT_ROOT = "outputs"
+
+
+def experiment_id(family: str, shape: str, suffix: str = "") -> str:
+    """The design-cache key: every knob that changes the generated design must appear."""
+    hardware = os.path.splitext(os.path.basename(ACCELERATOR))[0]
+    grid = array()
+    if trace_size():
+        suffix += f"_traced{trace_size()}"
+    return (
+        f"{hardware}-{family}{suffix}_{shape}"
+        f"-{grid.num_rows}_row_{grid.num_columns}_col"
+        f"-{stream_revision()}{library_revision()}"
+    )
+
+
+def design_dir(experiment_id: str) -> str:
+    return os.path.join(OUTPUT_ROOT, experiment_id)
+
+
+def solve_options(npu: str):
+    """How every solve runs: links and the off-chip port do not cap the overlap, and tile sizes
+    are searched around the mapping's seed.
+
+    Traced on this array, a core's idle time is lock stall rather than transfers queueing on a
+    shared route, and the off-chip traffic is priced by the hardware's off-chip bandwidth.
+    """
+    from stream.api import SolveOptions
+    from stream.opt.solver.solver import ConstraintSelection
+
+    return SolveOptions(
+        backend=BACKEND,
+        nb_cols_to_use=array().num_columns,
+        constraint_selection=ConstraintSelection(
+            transfer_contention=False, offchip_contention=False
+        ),
+        kernel_library=library(),
+        tile_search=True,
+        stage_options={
+            "npu": npu,
+            "trace_size": trace_size(),
+            "trace_max_tiles": trace_tiles(),
+        },
+    )
+
+
+def run_partition_codegen(
+    experiment_id: str, workload_path, candidate_mappings, npu: str
+) -> int:
+    """Price each candidate mapping with its own solve, build the cheapest, and return its index."""
+    from stream.api import select_mapping
+
+    candidates = [str(path) for path in candidate_mappings]
+    best = select_mapping(
+        ACCELERATOR,
+        str(workload_path),
+        design_dir(experiment_id),
+        candidates,
+        solve_options(npu),
+    )
+    run_codegen(experiment_id, workload_path, best.mapping, npu)
+    return candidates.index(best.mapping)
+
+
+def run_codegen(experiment_id: str, workload_path, mapping_path, npu: str) -> None:
+    """Solve the allocation and write each fused group's MLIR under the design directory."""
+    from stream.api import generate_code
+
+    generate_code(
+        ACCELERATOR,
+        str(workload_path),
+        design_dir(experiment_id),
+        str(mapping_path),
+        solve_options(npu),
+    )
