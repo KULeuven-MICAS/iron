@@ -95,6 +95,155 @@ def get_child_mlir_module(mlir_artifact: PythonGeneratedMLIRArtifact) -> Any:
     return callback_function(*gen.args, **gen.kwargs)
 
 
+def device_op_of(module: Any) -> Any:
+    """The device op of a design module, valid for as long as the module is held."""
+    return next(op for op in module.body.operations if isinstance(op, aie.DeviceOp))
+
+
+def _entry_windows(slice_info, subbuffer_layout, buffer_names):
+    """Each buffer's (kind, absolute offset, length, base buffer, offset in base)."""
+    windows = []
+    for name in buffer_names:
+        if name in slice_info:
+            base, start, end = slice_info[name]
+            kind, parent_offset, _ = subbuffer_layout[base]
+            windows.append((kind, parent_offset + start, end - start, base, start))
+        else:
+            kind, offset, length = subbuffer_layout[name]
+            windows.append((kind, offset, length, name, 0))
+    return windows
+
+
+def uniform_steps(entries, slice_info, subbuffer_layout) -> tuple[int, ...] | None:
+    """The byte step of each argument across consecutive runs of one design, or None.
+
+    An argument either advances through one buffer by its own length per run or is
+    the same window every run. The last argument is the output, and its span may not
+    overlap another argument's, so no run reads what an earlier one wrote.
+    """
+    rows = [_entry_windows(slice_info, subbuffer_layout, entry) for entry in entries]
+    n = len(rows)
+    steps = []
+    for column in zip(*rows):
+        if len({(kind, length, base) for kind, _, length, base, _ in column}) != 1:
+            return None
+        offsets = [window[1] for window in column]
+        step = offsets[1] - offsets[0]
+        if step not in (0, column[0][2]) or any(
+            b - a != step for a, b in zip(offsets, offsets[1:])
+        ):
+            return None
+        steps.append(step)
+    spans = [
+        (kind, offset, offset + (n if step else 1) * length)
+        for (kind, offset, length, _, _), step in zip(rows[0], steps)
+    ]
+    out_kind, out_lo, out_hi = spans[-1]
+    if any(
+        kind == out_kind and lo < out_hi and out_lo < hi for kind, lo, hi in spans[:-1]
+    ):
+        return None
+    return tuple(steps)
+
+
+def span_names(entry, n, steps, slice_info, subbuffer_layout) -> tuple[str, ...]:
+    """The first run's buffers widened to all ``n`` runs, registered in ``slice_info``."""
+    names = []
+    windows = _entry_windows(slice_info, subbuffer_layout, entry)
+    for name, step, (_, _, length, base, start) in zip(entry, steps, windows):
+        if step == 0:
+            names.append(name)
+            continue
+        span = f"{base}[{start}:{start + n * length}]#span"
+        slice_info[span] = (base, start, start + n * length)
+        names.append(span)
+    return tuple(names)
+
+
+_ITERABLE_SEQUENCE_OPS = {
+    "aiex.dma_configure_task_for",
+    "aiex.dma_start_task",
+    "aiex.dma_await_task",
+    "aiex.dma_free_task",
+}
+
+
+def replicate_sequence(dev_op: Any, n: int, steps_bytes: tuple[int, ...]) -> bool:
+    """Iterate a design's runtime sequence ``n`` times, advancing each argument by its step.
+
+    Only a sequence of shim DMA tasks iterates, each task's leading transfer dimension
+    free (extent one, stride zero) and the task not already repeated; anything else
+    leaves the module untouched and returns False. The argument types widen to the
+    whole span.
+    """
+    with dev_op.operation.context, ir.Location.unknown():
+        seq_op = next(
+            (
+                op
+                for op in dev_op.operation.regions[0].blocks[0].operations
+                if op.operation.name == "aie.runtime_sequence"
+            ),
+            None,
+        )
+        if seq_op is None:
+            return False
+        block = seq_op.operation.regions[0].blocks[0]
+        if len(block.arguments) != len(steps_bytes):
+            return False
+        itemsizes = [
+            ir.MemRefType(arg.type).element_type.width // 8 for arg in block.arguments
+        ]
+        bds = []
+        for op in block.operations:
+            name = op.operation.name
+            if name not in _ITERABLE_SEQUENCE_OPS:
+                return False
+            if name != "aiex.dma_configure_task_for":
+                continue
+            attributes = op.operation.attributes
+            if (
+                "repeat_count" in attributes
+                and ir.IntegerAttr(attributes["repeat_count"]).value != 0
+            ):
+                return False
+            for inner in op.operation.regions[0].blocks[0].operations:
+                if inner.operation.name != "aie.dma_bd":
+                    continue
+                attributes = inner.operation.attributes
+                sizes = list(ir.DenseI64ArrayAttr(attributes["static_sizes"]))
+                strides = list(ir.DenseI64ArrayAttr(attributes["static_strides"]))
+                if len(sizes) != 4 or sizes[0] != 1 or strides[0] != 0:
+                    return False
+                arg_index = next(
+                    (
+                        i
+                        for i, arg in enumerate(block.arguments)
+                        if inner.operation.operands[0] == arg
+                    ),
+                    None,
+                )
+                if arg_index is None:
+                    return False
+                bds.append((op.operation, inner.operation, sizes, strides, arg_index))
+        if not bds:
+            return False
+        for task, bd, sizes, strides, arg_index in bds:
+            sizes[0] = n
+            strides[0] = steps_bytes[arg_index] // itemsizes[arg_index]
+            bd.attributes["static_sizes"] = ir.DenseI64ArrayAttr.get(sizes)
+            bd.attributes["static_strides"] = ir.DenseI64ArrayAttr.get(strides)
+            task.attributes["repeat_count"] = ir.IntegerAttr.get(
+                ir.IntegerType.get_signless(32), n - 1
+            )
+        for arg, step in zip(block.arguments, steps_bytes):
+            if step == 0:
+                continue
+            old_type = ir.MemRefType(arg.type)
+            new_shape = [old_type.shape[0] * n, *old_type.shape[1:]]
+            arg.set_type(ir.MemRefType.get(new_shape, old_type.element_type))
+        return True
+
+
 def needs_additional_reset(runlist: list[Any]) -> bool:
     """Whether the sequence must configure one more device than the runlist asks for.
 
@@ -322,6 +471,52 @@ def fuse_mlir(artifact: SequenceMLIRArtifact) -> None:
 
 # Compilation Rules
 # ##########################################################################
+
+
+class ReplicatedMLIRArtifact(MLIRArtifact):
+    """A design module with its runtime sequence iterated over a span of runs."""
+
+    def __init__(
+        self,
+        filename: str,
+        source: PythonGeneratedMLIRArtifact,
+        n: int,
+        steps_bytes: tuple[int, ...],
+    ):
+        super().__init__(filename, dependencies=[source])
+        self.source = source
+        self.n = n
+        self.steps_bytes = steps_bytes
+
+
+def write_replicated_mlir(artifact: ReplicatedMLIRArtifact) -> None:
+    mlir_module = get_child_mlir_module(artifact.source)
+    if not replicate_sequence(
+        device_op_of(mlir_module), artifact.n, artifact.steps_bytes
+    ):
+        raise ValueError(
+            f"design {artifact.source.filename} does not iterate {artifact.n} times"
+        )
+    with open(artifact.filename, "w") as f:
+        f.write(str(mlir_module))
+
+
+class ReplicateMLIRCompilationRule(CompilationRule):
+    """Compilation rule that writes design modules with an iterated runtime sequence."""
+
+    def matches(self, graph: CompilationArtifactGraph) -> bool:
+        return any(graph.get_worklist(ReplicatedMLIRArtifact))
+
+    def compile(self, graph: CompilationArtifactGraph) -> list[CompilationCommand]:
+        commands: list[CompilationCommand] = []
+        for artifact in graph.get_worklist(ReplicatedMLIRArtifact):
+            commands.append(
+                PythonCallbackCompilationCommand(
+                    partial(write_replicated_mlir, artifact)
+                )
+            )
+            artifact.available = True
+        return commands
 
 
 class FusePythonGeneratedMLIRCompilationRule(CompilationRule):

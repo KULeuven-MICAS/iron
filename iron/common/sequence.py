@@ -89,13 +89,20 @@ class SequenceDispatch:
 
 
 class AutoDispatch(SequenceDispatch):
-    """Selects the platform default: full-ELF on NPU2, chained-xclbin elsewhere."""
+    """Selects the flow by what a dispatch must reconfigure.
+
+    On NPU2 a runlist of one design, run once or, for a free-running design, as one
+    uniformly advancing span, compiles to an xclbin whose hardware context configures
+    the array once; the full-ELF flow replays the whole array configuration on every
+    dispatch, which a single-design workload never needs. Everything else takes the
+    full ELF, and other platforms the chained xclbins.
+    """
 
     name = "auto"
 
     def resolve(self, device):
         if isinstance(device, NPU2):
-            return FusedDispatch()
+            return FusedDispatch(single_design_xclbin=True)
         return SeparateDispatch()
 
 
@@ -118,9 +125,18 @@ def _hand_built_kernels(op, objs=None):
 
 
 class FusedDispatch(SequenceDispatch):
-    """Single-ELF dispatch (NPU2 only): all operators fused into one ELF."""
+    """Single-ELF dispatch (NPU2 only): all operators fused into one ELF.
+
+    ``single_design_xclbin`` lets a runlist of one design, run once or iterated over
+    one uniformly advancing span, take the xclbin flow instead, configuring the array
+    once at context creation rather than on every dispatch.
+    """
 
     name = "fused"
+
+    def __init__(self, single_design_xclbin=False):
+        self._single_design_xclbin = single_design_xclbin
+        self._single = None
 
     def resolve(self, device):
         if not isinstance(device, NPU2):
@@ -129,7 +145,54 @@ class FusedDispatch(SequenceDispatch):
             )
         return self
 
+    def _folded_single_design(self, seq):
+        """(design, run count, byte steps, span buffer names), or None to stay fused."""
+        if not self._single_design_xclbin or seq.trace_size:
+            return None
+        designs, _ = seq.unique_designs()
+        if len(designs) != 1:
+            return None
+        design = designs[0]
+        entries = [tuple(bufs) for _op, *bufs in seq.runlist]
+        if len(entries) == 1:
+            return design, 1, (0,) * len(entries[0]), entries[0]
+        if not design.free_running:
+            return None
+        steps = comp.uniform_steps(entries, seq.slice_info, seq.subbuffer_layout)
+        if steps is None:
+            return None
+        module = comp.get_child_mlir_module(design.get_mlir_artifact())
+        if not comp.replicate_sequence(comp.device_op_of(module), len(entries), steps):
+            return None
+        names = comp.span_names(
+            entries[0], len(entries), steps, seq.slice_info, seq.subbuffer_layout
+        )
+        return design, len(entries), steps, names
+
     def set_up_artifacts(self, seq):
+        self._single = None
+        single = self._folded_single_design(seq)
+        if single is not None:
+            op, n, steps, entry_names = single
+            mlir_artifact = op.get_mlir_artifact()
+            if n > 1:
+                mlir_artifact = comp.ReplicatedMLIRArtifact(
+                    f"{seq.name}_folded.mlir", mlir_artifact, n, steps
+                )
+            kernels = op.get_kernel_artifacts()
+            xclbin_artifact = comp.XclbinArtifact(
+                f"{seq.name}.xclbin",
+                mlir_input=mlir_artifact,
+                dependencies=[mlir_artifact] + kernels,
+            )
+            insts_artifact = comp.InstsBinArtifact(
+                f"{seq.name}_insts.bin",
+                mlir_input=mlir_artifact,
+                dependencies=[mlir_artifact],
+            )
+            seq.add_artifacts([xclbin_artifact, insts_artifact])
+            self._single = (entry_names, xclbin_artifact, insts_artifact)
+            return
         mlir_artifact = self.build_fused_mlir(seq)
         kernel_objects = self._collect_kernel_artifacts(seq)
         full_elf_artifact = comp.FullElfArtifact(
@@ -187,6 +250,8 @@ class FusedDispatch(SequenceDispatch):
         return kernel_artifacts
 
     def make_callable(self, seq):
+        if self._single is not None:
+            return SequenceSingleXclbinCallable(seq, *self._single)
         return SequenceFullELFCallable(seq)
 
 
@@ -311,8 +376,9 @@ class OperatorSequence(AIEOperatorBase):
     Args:
         dispatch: Dispatch strategy, given either as a mode name or as a
             :class:`SequenceDispatch` instance. Recognised names:
-            ``"auto"`` (default) selects ``"fused"`` on NPU2 and
-            ``"separate"`` on NPU1.  ``"fused"`` uses a single-ELF
+            ``"auto"`` (default) selects ``"fused"`` on NPU2, where a
+            design run once, or a free-running design iterated over one
+            span, compiles to one xclbin instead, and ``"separate"`` on NPU1.  ``"fused"`` uses a single-ELF
             dispatch (requires NPU2).  ``"separate"`` compiles each
             sub-operator to its own xclbin and invokes them sequentially.
             ``"reference"`` runs only the per-operator CPU reference
@@ -871,6 +937,34 @@ class SequenceReferenceCallable(_PerBufferCallable):
             out_flat = self._resolve_buffer(out_name).torch_view()
             n_out = int(np.prod(out_spec.shape)) if out_spec.shape else 1
             out_flat[:n_out].copy_(out.reshape(-1).to(torch.bfloat16))
+
+
+class SequenceSingleXclbinCallable(SequenceXclbinCallable):
+    """One design covering the whole runlist: one xclbin, one dispatch per call.
+
+    The hardware context configures the array when it is created, so a dispatch
+    streams instructions only.
+    """
+
+    def __init__(self, op, entry_names, xclbin_artifact, insts_artifact):
+        self._entry_names = entry_names
+        self._xclbin_artifact = xclbin_artifact
+        self._insts_artifact = insts_artifact
+        super().__init__(op, dispatch=None)
+
+    def _allocate_buffers(self):
+        _PerBufferCallable._allocate_buffers(self)
+        self.kernel_handle = aie_utils.DefaultNPURuntime.load(
+            NPUKernel(
+                xclbin_path=self._xclbin_artifact.filename,
+                kernel_name=self._xclbin_artifact.kernel_name,
+                insts_path=self._insts_artifact.filename,
+            )
+        )
+        self._args = [self._resolve_buffer(name) for name in self._entry_names]
+
+    def _run(self):
+        aie_utils.DefaultNPURuntime.run(self.kernel_handle, self._args)
 
 
 class SequenceCompareCallable(SequenceXclbinCallable):
