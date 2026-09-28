@@ -29,6 +29,7 @@ import aie.utils as aie_utils
 from aie.iron.device import NPU2
 from aie.utils.verify import Tolerance
 
+from iron.common import compilation as comp
 from iron.common.sequence import CompareDispatch, OperatorSequence
 from iron.common.compilation.sequence import fuse_mlir
 from iron.common.test_utils import verify_buffer
@@ -362,3 +363,62 @@ def test_non_input_buffers_sync_without_explicit_flush(dispatch, aie_context):
             out, "out", torch.nn.functional.relu(a + b), rel_tol=0.04, abs_tol=1e-6
         )
         assert not errors, f"rep {rep}: out has {len(errors)} mismatches"
+
+
+# ---------------------------------------------------------------------------
+# 6. Iterating one design: a span folds only when no run reads another's output.
+# ---------------------------------------------------------------------------
+
+_L = 1024
+_LAYOUT = {
+    "x": ("input", 0, 4 * _L),
+    "w": ("input", 4 * _L, _L),
+    "y": ("output", 0, 4 * _L),
+}
+
+
+def _slices(*names):
+    """``x0`` is window 0 of ``x``, each window ``_L`` bytes."""
+    return {f"{n[0]}{i}": (n[0], i * _L, (i + 1) * _L) for n in names for i in range(4)}
+
+
+def test_uniform_steps_advance_each_argument_by_its_window():
+    slices = _slices("x", "y")
+    runs = [(f"x{i}", "w", f"y{i}") for i in range(4)]
+    assert comp.uniform_steps(runs, slices, _LAYOUT) == (_L, 0, _L)
+    names = comp.span_names(runs[0], 4, (_L, 0, _L), slices, _LAYOUT)
+    assert [slices.get(name) for name in names] == [
+        ("x", 0, 4 * _L),
+        None,
+        ("y", 0, 4 * _L),
+    ]
+
+
+@pytest.mark.parametrize(
+    "runs",
+    [
+        [("x0", "w", "x1"), ("x1", "w", "x2")],  # each run reads the last one's output
+        [("x0", "w", "y0"), ("x2", "w", "y1")],  # x skips a window
+        [("x0", "w", "y0"), ("w", "w", "y1")],  # x changes buffer
+    ],
+)
+def test_uniform_steps_reject_what_one_span_cannot_run(runs):
+    assert comp.uniform_steps(runs, _slices("x", "y"), _LAYOUT) is None
+
+
+def test_replicate_sequence_iterates_the_dma_tasks_once(aie_context):
+    relu = ReLU(
+        size=_ADD_RELU_SIZE,
+        num_aie_columns=_ADD_RELU_COLS,
+        num_channels=1,
+        tile_size=_ADD_RELU_TILE,
+        context=aie_context,
+    )
+    module = comp.get_child_mlir_module(relu.get_mlir_artifact())
+    device_op = comp.device_op_of(module)
+    step = 2 * _ADD_RELU_SIZE
+    assert comp.replicate_sequence(device_op, 3, (step, step))
+    text = str(device_op)
+    assert f"memref<{3 * _ADD_RELU_SIZE}xbf16>" in text
+    assert "repeat_count = 2" in text
+    assert not comp.replicate_sequence(device_op, 3, (step, step))
