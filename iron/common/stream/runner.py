@@ -7,6 +7,7 @@ An operator contributes its family name, its shape string and the knobs that dis
 designs; the accelerator, solver, output root and design-cache key are chosen here.
 """
 
+import json
 import os
 
 import stream
@@ -25,6 +26,10 @@ ACCELERATOR = os.path.join(
 )
 BACKEND = os.environ.get("STREAM_BACKEND", "ortools_gscip")
 OUTPUT_ROOT = "outputs"
+PORT_ACTIVITY = "port_activity.json"
+# Reports what every tile DMA, the shim's measured bandwidth and each link carry per iteration;
+# with neither bound set it adds no constraint, so the design stream returns is unchanged.
+PORT_REPORT = {"memory_ports": {"interval": False, "burst": False}}
 
 
 def experiment_id(family: str, shape: str, suffix: str = "") -> str:
@@ -45,8 +50,8 @@ def design_dir(experiment_id: str) -> str:
 
 
 def solve_options(npu: str):
-    """How every solve runs: links and the off-chip port do not cap the overlap, and tile sizes
-    are searched around the mapping's seed.
+    """How every solve runs: links and the off-chip port do not cap the overlap, tile sizes
+    are searched around the mapping's seed, and port activity is reported.
 
     Traced on this array, a core's idle time is lock stall rather than transfers queueing on a
     shared route, and the off-chip traffic is priced by the hardware's off-chip bandwidth.
@@ -62,6 +67,7 @@ def solve_options(npu: str):
         ),
         kernel_library=library(),
         tile_search=True,
+        families=[PORT_REPORT],
         stage_options={
             "npu": npu,
             "trace_size": trace_size(),
@@ -89,13 +95,30 @@ def run_partition_codegen(
 
 
 def run_codegen(experiment_id: str, workload_path, mapping_path, npu: str) -> None:
-    """Solve the allocation and write each fused group's MLIR under the design directory."""
+    """Solve the allocation, write each fused group's MLIR under the design directory, and
+    record the groups' port activity beside it."""
     from stream.api import generate_code
 
-    generate_code(
+    estimate = generate_code(
         ACCELERATOR,
         str(workload_path),
         design_dir(experiment_id),
         str(mapping_path),
         solve_options(npu),
     )
+    write_port_activity(
+        design_dir(experiment_id), estimate.context.get("group_allocations")
+    )
+
+
+def write_port_activity(directory: str, group_allocations: dict) -> None:
+    """Per fused group, stream's port-activity rows (busiest first): bits per iteration against
+    each resource's bandwidth and the initiation interval."""
+    rows = {
+        f"group_{index}": ((allocation or {}).get("performance") or {}).get(
+            "memory_ports", []
+        )
+        for index, allocation in sorted(group_allocations.items())
+    }
+    with open(os.path.join(directory, PORT_ACTIVITY), "w") as f:
+        json.dump(rows, f, indent=1)
