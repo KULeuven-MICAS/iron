@@ -12,7 +12,12 @@ import os
 
 import stream
 
-from iron.common.stream.design import stream_revision, trace_size, trace_tiles
+from iron.common.stream.design import (
+    stream_revision,
+    trace_size,
+    trace_tiles,
+    traced_tiles,
+)
 from iron.common.stream.hardware import array
 from iron.common.stream.kernel_library import library
 from iron.common.stream.kernel_library import revision as library_revision
@@ -37,7 +42,10 @@ def experiment_id(family: str, shape: str, suffix: str = "") -> str:
     hardware = os.path.splitext(os.path.basename(ACCELERATOR))[0]
     grid = array()
     if trace_size():
-        suffix += f"_traced{trace_size()}"
+        tiles = "_".join(f"{col}.{row}" for col, row in traced_tiles())
+        suffix += (
+            f"_traced{trace_size()}_n{trace_tiles()}{'_' + tiles if tiles else ''}"
+        )
     return (
         f"{hardware}-{family}{suffix}_{shape}"
         f"-{grid.num_rows}_row_{grid.num_columns}_col"
@@ -72,6 +80,7 @@ def solve_options(npu: str, kernel_library=None):
             "npu": npu,
             "trace_size": trace_size(),
             "trace_max_tiles": trace_tiles(),
+            "trace_tiles": traced_tiles(),
         },
     )
 
