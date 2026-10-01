@@ -23,8 +23,6 @@ from iron.common.stream.ops import artifacts_for_object, linked_objects
 
 class StreamGroup(MLIROperator):
     group_index: int
-    # stream-dse's cores loop for as long as the array stays configured.
-    free_running = True
 
     @property
     def _design(self):

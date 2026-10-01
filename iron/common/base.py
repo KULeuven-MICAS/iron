@@ -116,10 +116,6 @@ class MLIROperator(AIEOperatorBase):
         "cols": "n",
     }
 
-    # Whether the design's cores loop for as long as the array stays configured, so
-    # an OperatorSequence may iterate its runtime sequence over consecutive runs.
-    free_running: ClassVar[bool] = False
-
     @property
     def operator_dir(self) -> Path:
         return Path(inspect.getfile(type(self))).parent
