@@ -73,6 +73,10 @@ class StreamGroup(MLIROperator):
             raise ValueError(f"no rule builds the kernel objects {missing}")
         return list(produced.values())
 
+    def design_root(self) -> Path:
+        """The directory stream wrote this group's design to, with its ``estimate.json``."""
+        return Path(self._design.design_root(**self._dims()))
+
     def design_key(self):
         """Groups whose generated design is byte-identical share it."""
         return self._design.group_digest(self.group_index, **self._dims())
