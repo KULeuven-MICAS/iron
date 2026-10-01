@@ -39,15 +39,17 @@ def stream_revision() -> str:
 
     A design is cached under its experiment id and rebuilt from the mtime of its own
     ``stream_design.py``, so without this a stream-side change is served the design from
-    before it. Mtimes rather than the checkout's commit: an edit that is not committed
-    yet is exactly the case that goes unnoticed.
+    before it: its sources, and the hardware descriptions it prices against. Mtimes
+    rather than the checkout's commit: an edit that is not committed yet is exactly the
+    case that goes unnoticed.
     """
     import stream
 
     root = Path(stream.__file__).parent
     stamps = sorted(
         (str(path.relative_to(root)), path.stat().st_mtime_ns)
-        for path in root.rglob("*.py")
+        for pattern in ("*.py", "*.yaml")
+        for path in root.rglob(pattern)
     )
     return hashlib.sha256(f"{stream.__version__}{stamps}".encode()).hexdigest()[:8]
 
