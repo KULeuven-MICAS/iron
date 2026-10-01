@@ -29,11 +29,9 @@ def _estimate(**overrides):
     }
 
 
-def test_runs_back_to_back_overlap_as_iterations_do():
-    """Four heads of one design: four runs, three of them overlapping the run ahead."""
-    record = {"estimate": _estimate(), "point": {"heads": 4}}
-    cycles = 4 * 1000 - 3 * 300 + 50
-    assert predicted_us(record, 10.0) == pytest.approx(cycles / AIE_CLOCK_HZ * 1e6 + 10)
+def test_the_estimate_is_streams_cycles_on_top_of_a_dispatch():
+    record = {"estimate": _estimate() | {"cycles": 3600.0}}
+    assert predicted_us(record, 10.0) == pytest.approx(3600 / AIE_CLOCK_HZ * 1e6 + 10)
 
 
 def test_a_design_two_groups_share_is_traced_over_both_runs():

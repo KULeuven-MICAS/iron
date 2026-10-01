@@ -223,10 +223,6 @@ def _(x: torch.Tensor) -> torch.Tensor:
     return torch.empty_like(x)
 
 
-def _to_gemm(a, b):
-    return opset18.Gemm(a, b)
-
-
 def _to_silu(x):
     return Silu(x)
 
@@ -261,11 +257,10 @@ class StreamOp:
     translation: Callable | None = None
 
 
-# torch operator -> its ONNX form and AIE kernel. Gemm rather than the exporter's
-# default MatMul because stream-dse's Gemm parser iterates (m, k, n), which is the
-# order the mappings address as D0/D1/D2.
+# torch operator -> its ONNX form and AIE kernel. A matmul keeps the exporter's MatMul,
+# whose leading axes are batch axes, such as attention's heads.
 TORCH_OPS: dict[Callable, StreamOp] = {
-    torch.ops.aten.matmul.default: StreamOp("Gemm", "gemm", _to_gemm),
+    torch.ops.aten.matmul.default: StreamOp("MatMul", "gemm"),
     torch.ops.aten.silu.default: StreamOp("Silu", "silu", _to_silu),
     torch.ops.aten.mul.Tensor: StreamOp("Mul", "eltwise_mul", _to_mul),
     torch.ops.aten.softmax.int: StreamOp("Softmax", "softmax", _to_softmax),

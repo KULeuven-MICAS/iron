@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (C) 2026 KU Leuven (MICAS). All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""stream-dse design for one head's prefill attention core.
+"""stream-dse design for the prefill attention core of every head.
 
 The workload and the mapping are both generated from
 :mod:`iron.operators.mha_prefill_stream.reference`, so the design, the golden output and
@@ -29,7 +29,6 @@ from iron.common.stream.mapping import (
 )
 from iron.common.stream.runner import design_dir, experiment_id, run_codegen
 from iron.common.stream.workload import export_workload
-from iron.operators.mha_prefill_stream.op import BYTES_PER_ELEMENT
 from iron.operators.mha_prefill_stream.reference import (
     CONTEXT_NODE,
     NODE_NAMES,
@@ -54,6 +53,7 @@ FLASH_MAX_SEQ = 8192
 FUSED_QUERY_TILE = 16
 
 CORE_BYTES = 64 * 1024
+BYTES_PER_ELEMENT = 2  # bfloat16
 
 
 def flash_query_seed(query_block=None) -> int:
@@ -202,9 +202,12 @@ def _check_shapes(seq_len, d_head, k, flash=False):
 
 
 @lru_cache(maxsize=None)
-def workload_for(seq_len, d_head, flash=False):
-    """The exported workload for one problem size."""
-    zeros = lambda *shape: torch.zeros(shape, dtype=torch.bfloat16)  # noqa: E731
+def workload_for(seq_len, d_head, heads=1, flash=False):
+    """The exported workload for one problem size, its leading axis the heads."""
+
+    def zeros(*shape):
+        return torch.zeros((heads, *shape), dtype=torch.bfloat16)
+
     return export_workload(
         attention_core_module(flash=flash),
         (zeros(seq_len, d_head), zeros(d_head, seq_len), zeros(seq_len, d_head)),
@@ -217,6 +220,7 @@ def build_inputs(
     seq_len,
     d_head,
     output_dir,
+    heads=1,
     k=LAYER_BY_LAYER,
     causal=False,
     flash=False,
@@ -224,7 +228,7 @@ def build_inputs(
 ):
     """Write the workload and mapping for one configuration; return their paths."""
     _check_shapes(seq_len, d_head, k, flash)
-    workload = workload_for(seq_len, d_head, flash)
+    workload = workload_for(seq_len, d_head, heads, flash)
     output_dir = Path(output_dir)
     return (
         workload.write(output_dir / "workload.onnx"),
@@ -237,57 +241,42 @@ def build_inputs(
     )
 
 
-def _experiment_id(seq_len, d_head, k, causal, flash, query_block=None):
+def _experiment_id(*, k, seq_len, d_head, heads, causal, flash, query_block=None):
     suffix = f"_k{k}" if k != LAYER_BY_LAYER else ""
     if flash:
         suffix += "_flash" if query_block is None else f"_flash_q{query_block}"
     elif causal:
         suffix += "_causal"
-    return experiment_id("mha", f"{seq_len}_{d_head}", suffix)
+    return experiment_id("mha", f"{heads}_{seq_len}_{d_head}", suffix)
 
 
-def _run_codegen(seq_len, d_head, npu, k, causal, flash, query_block=None):
+def design_root(*, npu, **dims):
+    """The directory stream writes this design and its estimate to."""
+    return design_dir(_experiment_id(**dims))
+
+
+def _run_codegen(npu, query_block=None, **dims):
     """Run stream-dse's constraint optimization and code generation once."""
-    eid = _experiment_id(seq_len, d_head, k, causal, flash, query_block)
+    eid = _experiment_id(query_block=query_block, **dims)
     workload_path, mapping_path = build_inputs(
-        seq_len,
-        d_head,
-        design_dir(eid),
-        k=k,
-        causal=causal,
-        flash=flash,
-        query_block=query_block,
+        output_dir=design_dir(eid), query_block=query_block, **dims
     )
     library = None if query_block is None else with_block(query_block)
     run_codegen(eid, workload_path, mapping_path, npu, library)
 
 
-def design_root(*, k, seq_len, d_head, npu, causal, flash, query_block=None):
-    """The directory stream writes this design and its estimate to."""
-    return design_dir(_experiment_id(seq_len, d_head, k, causal, flash, query_block))
-
-
-def _design_paths(seq_len, d_head, k, causal=False, flash=False, query_block=None):
-    return design_paths(
-        design_dir(_experiment_id(seq_len, d_head, k, causal, flash, query_block)),
-        len(group_layers(k)),
-    )
-
-
-def _group_text(
-    group_index, *, k, seq_len, d_head, npu, causal, flash, query_block=None
-) -> str:
+def _group_text(group_index, **dims) -> str:
     return group_text(
         group_index,
-        _design_paths(seq_len, d_head, k, causal, flash, query_block),
-        lambda: _run_codegen(seq_len, d_head, npu, k, causal, flash, query_block),
+        design_paths(design_root(**dims), len(group_layers(dims["k"]))),
+        lambda: _run_codegen(**dims),
     )
 
 
-def group_ports(seq_len, d_head, k=LAYER_BY_LAYER):
+def group_ports(seq_len, d_head, heads=1, k=LAYER_BY_LAYER):
     """Per fused group, the tensor names it takes in and hands on, read off the plain
     graph, whose three nodes the flash graph shares."""
-    return group_boundaries(workload_for(seq_len, d_head), group_layers(k))
+    return group_boundaries(workload_for(seq_len, d_head, heads), group_layers(k))
 
 
 def group_digest(group_index, **dims) -> str:

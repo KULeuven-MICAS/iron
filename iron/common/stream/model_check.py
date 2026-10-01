@@ -39,6 +39,8 @@ TRACE_PORTS = tuple(
     ",".join(f"{direction}:{channel}" for channel in range(MEMTILE_CHANNELS))
     for direction in ("S2MM", "MM2S")
 )
+# Traced builds take fewer heads, so the trace of a long sequence fits its buffer; each trace
+# is compared with stream's estimate of the design it traced.
 TRACE_HEADS = 2
 # What a memory-tile DMA channel moves a traced cycle it runs, measured on an element-wise
 # design whose bytes through each memory tile are known.
@@ -241,7 +243,7 @@ def _run(job, out):
         IRON_TRACE_PORTS=job["ports"],
     ):
         op = build(job["operator"], point, job["candidate"], build_dir)
-        return {"heads": point.get("heads")} | trace(op, out)
+        return trace(op, out)
 
 
 def sweep(out, operators, traced):
@@ -278,16 +280,9 @@ def load(out):
 
 
 def predicted_us(record, dispatch_us):
-    """stream's estimate in microseconds, on top of what a dispatch costs. A design run
-    back to back continues its steady state, each run overlapping the one ahead of it as
-    one iteration overlaps the next."""
-    estimate = record["estimate"]
-    runs = record.get("heads") or record["point"].get("heads", 1)
-    cycles = estimate["dispatch_cycles"]
-    for total, group in zip(estimate["group_cycles"], estimate["groups"].values()):
-        overlap = group["latency"]["overlap_between_iterations"]
-        cycles += runs * total - (runs - 1) * overlap
-    return cycles / AIE_CLOCK_HZ * 1e6 + dispatch_us
+    """stream's estimate in microseconds, every group included, on top of what a
+    dispatch costs."""
+    return record["estimate"]["cycles"] / AIE_CLOCK_HZ * 1e6 + dispatch_us
 
 
 def _label(candidate):
@@ -334,7 +329,7 @@ def _port_rows(traced):
     for record in traced:
         slots = record["ports"].split(",")
         for design in record["traced"]:
-            # Every run of the design is an entry of the runlist, heads included.
+            # Every run of the design is an entry of the runlist.
             group, runs = design["groups"][0], len(design["groups"])
             view = record["estimate"]["groups"][f"group_{group}"]
             latency = view["latency"]
