@@ -21,7 +21,7 @@ from iron.common.stream.design import (
     region_module,
 )
 from iron.common.stream.hardware import array
-from iron.common.stream.kernel_library import flash_blocks
+from iron.common.stream.kernel_library import flash_blocks, with_block
 from iron.common.stream.mapping import (
     FusedGroup,
     emit_mapping,
@@ -56,13 +56,14 @@ FUSED_QUERY_TILE = 16
 CORE_BYTES = 64 * 1024
 
 
-def flash_query_seed() -> int:
-    """The query block a flash mapping starts at: the finest one the kernels compile for.
+def flash_query_seed(query_block=None) -> int:
+    """The query block a flash mapping starts at: the caller's when pinned, otherwise the
+    finest one the kernels compile for.
 
     stream-dse places and prices every block its kernels offer, so this only says where the
     search starts and not what it returns: seq 256 gives the same design from either.
     """
-    return min(flash_blocks())
+    return query_block or min(flash_blocks())
 
 
 def key_tile(seq_len, k, flash=False):
@@ -84,24 +85,24 @@ def query_per_core(seq_len):
     return seq_len // array().num_rows
 
 
-def query_tile(seq_len, k, flash=False):
+def query_tile(seq_len, k, flash=False, query_block=None):
     """Query positions one core works at a time. Split off, a core takes its whole slice
     at once: a second temporal loop beside the key one would put two variables in a reuse
     window, which the object-fifo lowering does not express. Fused, the key and the value
     are resident beside the tile, so the query is what iterates instead. Flash, the block
     is what stream-dse searches and both the query and the key iterate."""
     if flash:
-        return flash_query_seed()
+        return flash_query_seed(query_block)
     return FUSED_QUERY_TILE if k == 1 else query_per_core(seq_len)
 
 
-def _softmax_rows(seq_len, k, flash=False):
+def _softmax_rows(seq_len, k, flash=False, query_block=None):
     """Query rows one softmax call normalizes. Fused, the group's layers share one query
     tile and the kernel loops the rows of it; split off, the tile is a single row."""
-    return query_tile(seq_len, k, flash) if k == 1 else 1
+    return query_tile(seq_len, k, flash, query_block) if k == 1 else 1
 
 
-def _scores_tile(seq_len, d_head, k, flash=False):
+def _scores_tile(seq_len, d_head, k, flash=False, query_block=None):
     """The score GEMM's (m, k, n).
 
     Exactly one dimension may iterate, since a tensor gets one reuse variable. Fused, the
@@ -111,7 +112,7 @@ def _scores_tile(seq_len, d_head, k, flash=False):
     block onwards comes back wrong.
     """
     if flash:
-        return flash_query_seed(), d_head, FLASH_BLOCK
+        return flash_query_seed(query_block), d_head, FLASH_BLOCK
     query, key = query_tile(seq_len, k), seq_len
     if k == 1:
         return query, d_head, seq_len
@@ -120,28 +121,28 @@ def _scores_tile(seq_len, d_head, k, flash=False):
     return query, d_head // 2, key
 
 
-def kernel_tiles(seq_len, d_head, k, flash=False):
+def kernel_tiles(seq_len, d_head, k, flash=False, query_block=None):
     """Each GEMM layer's kernel tile, in the (m, k, n) order the kernel takes. The
     kernel tile and the intra-core tile are the same tile, so they are declared once."""
     return {
-        SCORES_NODE: _scores_tile(seq_len, d_head, k, flash),
+        SCORES_NODE: _scores_tile(seq_len, d_head, k, flash, query_block),
         CONTEXT_NODE: (
-            query_tile(seq_len, k, flash),
+            query_tile(seq_len, k, flash, query_block),
             key_tile(seq_len, k, flash),
             d_head,
         ),
     }
 
 
-def _kernel_kwargs(seq_len, d_head, k, causal, flash=False):
+def _kernel_kwargs(seq_len, d_head, k, causal, flash=False, query_block=None):
     """Each layer's kernel arguments; where the layers run is stream's to derive."""
-    tiles = kernel_tiles(seq_len, d_head, k, flash)
+    tiles = kernel_tiles(seq_len, d_head, k, flash, query_block)
 
     def gemm(m, contraction, n):
         return dict(m=m, k=contraction, n=n, layout="default")
 
     softmax = dict(
-        m=_softmax_rows(seq_len, k, flash),
+        m=_softmax_rows(seq_len, k, flash, query_block),
         n=FLASH_BLOCK if flash else seq_len,
         layout="contiguous",
     )
@@ -213,7 +214,13 @@ def workload_for(seq_len, d_head, flash=False):
 
 
 def build_inputs(
-    seq_len, d_head, output_dir, k=LAYER_BY_LAYER, causal=False, flash=False
+    seq_len,
+    d_head,
+    output_dir,
+    k=LAYER_BY_LAYER,
+    causal=False,
+    flash=False,
+    query_block=None,
 ):
     """Write the workload and mapping for one configuration; return their paths."""
     _check_shapes(seq_len, d_head, k, flash)
@@ -223,43 +230,57 @@ def build_inputs(
         workload.write(output_dir / "workload.onnx"),
         emit_mapping(
             workload,
-            _kernel_kwargs(seq_len, d_head, k, causal, flash),
+            _kernel_kwargs(seq_len, d_head, k, causal, flash, query_block),
             _groups(k),
             output_dir / "mapping.yaml",
         ),
     )
 
 
-def _experiment_id(seq_len, d_head, k, causal, flash):
+def _experiment_id(seq_len, d_head, k, causal, flash, query_block=None):
     suffix = f"_k{k}" if k != LAYER_BY_LAYER else ""
     if flash:
-        suffix += "_flash"
+        suffix += "_flash" if query_block is None else f"_flash_q{query_block}"
     elif causal:
         suffix += "_causal"
     return experiment_id("mha", f"{seq_len}_{d_head}", suffix)
 
 
-def _run_codegen(seq_len, d_head, npu, k, causal, flash):
+def _run_codegen(seq_len, d_head, npu, k, causal, flash, query_block=None):
     """Run stream-dse's constraint optimization and code generation once."""
-    eid = _experiment_id(seq_len, d_head, k, causal, flash)
+    eid = _experiment_id(seq_len, d_head, k, causal, flash, query_block)
     workload_path, mapping_path = build_inputs(
-        seq_len, d_head, design_dir(eid), k=k, causal=causal, flash=flash
+        seq_len,
+        d_head,
+        design_dir(eid),
+        k=k,
+        causal=causal,
+        flash=flash,
+        query_block=query_block,
     )
-    run_codegen(eid, workload_path, mapping_path, npu)
+    library = None if query_block is None else with_block(query_block)
+    run_codegen(eid, workload_path, mapping_path, npu, library)
 
 
-def _design_paths(seq_len, d_head, k, causal=False, flash=False):
+def design_root(*, k, seq_len, d_head, npu, causal, flash, query_block=None):
+    """The directory stream writes this design and its estimate to."""
+    return design_dir(_experiment_id(seq_len, d_head, k, causal, flash, query_block))
+
+
+def _design_paths(seq_len, d_head, k, causal=False, flash=False, query_block=None):
     return design_paths(
-        design_dir(_experiment_id(seq_len, d_head, k, causal, flash)),
+        design_dir(_experiment_id(seq_len, d_head, k, causal, flash, query_block)),
         len(group_layers(k)),
     )
 
 
-def _group_text(group_index, *, k, seq_len, d_head, npu, causal, flash) -> str:
+def _group_text(
+    group_index, *, k, seq_len, d_head, npu, causal, flash, query_block=None
+) -> str:
     return group_text(
         group_index,
-        _design_paths(seq_len, d_head, k, causal, flash),
-        lambda: _run_codegen(seq_len, d_head, npu, k, causal, flash),
+        _design_paths(seq_len, d_head, k, causal, flash, query_block),
+        lambda: _run_codegen(seq_len, d_head, npu, k, causal, flash, query_block),
     )
 
 

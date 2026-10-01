@@ -49,7 +49,7 @@ def design_dir(experiment_id: str) -> str:
     return os.path.join(OUTPUT_ROOT, experiment_id)
 
 
-def solve_options(npu: str):
+def solve_options(npu: str, kernel_library=None):
     """How every solve runs: links and the off-chip port do not cap the overlap, tile sizes
     are searched around the mapping's seed, and port activity is reported.
 
@@ -65,7 +65,7 @@ def solve_options(npu: str):
         constraint_selection=ConstraintSelection(
             transfer_contention=False, offchip_contention=False
         ),
-        kernel_library=library(),
+        kernel_library=kernel_library or library(),
         tile_search=True,
         families=[PORT_REPORT],
         stage_options={
@@ -94,7 +94,9 @@ def run_partition_codegen(
     return candidates.index(best.mapping)
 
 
-def run_codegen(experiment_id: str, workload_path, mapping_path, npu: str) -> None:
+def run_codegen(
+    experiment_id: str, workload_path, mapping_path, npu: str, kernel_library=None
+) -> None:
     """Solve the allocation, write each fused group's MLIR under the design directory, and
     record the groups' port activity beside it."""
     from stream.api import generate_code
@@ -104,7 +106,7 @@ def run_codegen(experiment_id: str, workload_path, mapping_path, npu: str) -> No
         str(workload_path),
         design_dir(experiment_id),
         str(mapping_path),
-        solve_options(npu),
+        solve_options(npu, kernel_library),
     )
     write_port_activity(
         design_dir(experiment_id), estimate.context.get("group_allocations")

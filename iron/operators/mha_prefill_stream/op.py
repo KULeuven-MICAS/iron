@@ -28,6 +28,7 @@ class _MHAStreamGroup(StreamGroup):
     group_index: int
     causal: bool = False
     flash: bool = False
+    query_block: int | None = None
     context: Any = field(default=None, repr=False, compare=False)
 
     def __post_init__(self):
@@ -46,6 +47,7 @@ class _MHAStreamGroup(StreamGroup):
             "d_head": self.d_head,
             "causal": self.causal,
             "flash": self.flash,
+            "query_block": self.query_block,
             "npu": aie_utils.get_current_device().resolve().name,
         }
 
@@ -84,8 +86,9 @@ class MHAPrefillStream(OperatorSequence):
 
     One head's ``softmax(q @ k_t) @ v``, replayed over ``heads`` by slicing the per-head
     buffers. ``causal`` masks every key at a later position than its query; ``flash``
-    blocks the key instead of keeping it resident, and is always causal. ``README.md``
-    has what each costs and what bounds them.
+    blocks the key instead of keeping it resident, and is always causal. ``query_block``
+    pins the flash query block; left ``None``, stream chooses among those the kernels
+    compile for. ``README.md`` has what each costs and what bounds them.
 
     The caller hands in a ``q`` already scaled by ``1/sqrt(d_head)`` and a ``k_t``
     already transposed. Runtime buffers are named by
@@ -105,6 +108,7 @@ class MHAPrefillStream(OperatorSequence):
         context=None,
         share_designs=True,
         dispatch="auto",
+        query_block=None,
     ):
         from iron.common.stream.design import trace_size
         from iron.operators.mha_prefill_stream.stream_design import (
@@ -112,6 +116,10 @@ class MHAPrefillStream(OperatorSequence):
             group_ports,
         )
 
+        if query_block is not None and not flash:
+            raise ValueError(
+                "query_block pins the flash query block, so it needs flash"
+            )
         k = (1 if flash else LAYER_BY_LAYER) if k is None else k
         causal = causal or flash
         ports = [
@@ -125,6 +133,7 @@ class MHAPrefillStream(OperatorSequence):
                 group_index=index,
                 causal=causal,
                 flash=flash,
+                query_block=query_block,
                 context=context,
             )
             for index in range(len(ports))
@@ -142,6 +151,7 @@ class MHAPrefillStream(OperatorSequence):
             name=(
                 f"mha_prefill_stream_k{k}_h{heads}_s{seq_len}_d{d_head}"
                 f"{'_flash' if flash else '_causal' if causal else ''}"
+                f"{'' if query_block is None else f'_q{query_block}'}"
             ),
             runlist=runlist,
             input_args=["q", "k_t", "v"],

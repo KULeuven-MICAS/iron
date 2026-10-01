@@ -4,6 +4,7 @@
 """IRON's kernel library, as the stream-dse KernelLibrary it hands to every solve."""
 
 import hashlib
+from dataclasses import replace
 from functools import lru_cache
 from pathlib import Path
 
@@ -28,6 +29,23 @@ def _load(source: Path):
     if not source.exists():
         raise FileNotFoundError(f"no stream-dse kernel library for {source.stem}")
     return KernelLibrary.load(source)
+
+
+def with_block(block: int, kernel_dir: str | None = None):
+    """The library with every block list narrowed to ``block``, so the solve builds the one
+    design of those it would otherwise choose between."""
+    source = library(kernel_dir)
+    kernels = {}
+    for symbol, spec in source.kernels.items():
+        dims = []
+        for dim in spec.dims:
+            if dim.blocks and block not in dim.blocks:
+                raise ValueError(
+                    f"{symbol} compiles {dim.name} for {dim.blocks}, not {block}"
+                )
+            dims.append(replace(dim, blocks=(block,)) if dim.blocks else dim)
+        kernels[symbol] = replace(spec, dims=tuple(dims))
+    return replace(source, kernels=kernels)
 
 
 def fixed_dims(symbol: str, kernel_dir: str | None = None) -> dict[str, int]:
