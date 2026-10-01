@@ -24,7 +24,13 @@ __all__ = [
     "digest",
     "trace_size",
     "trace_tiles",
+    "traced_tiles",
+    "traced_ports",
 ]
+
+# A memory tile's trace packet type, and the event slots one trace unit has.
+_MEMTILE_PACKET = 3
+_EVENT_SLOTS = 8
 
 
 @lru_cache(maxsize=None)
@@ -101,7 +107,48 @@ def group_text(group_index: int, paths: list[str], generate) -> str:
     """
     if not all(os.path.exists(path) for path in paths):
         generate()
-    return Path(paths[group_index]).read_text()
+    text = Path(paths[group_index]).read_text()
+    ports = traced_ports()
+    return _watch_dma_ports(text, ports) if ports else text
+
+
+def _watch_dma_ports(mlir_text: str, ports) -> str:
+    """The design with every traced memory tile counting cycles its DMA ``ports`` run, in
+    place of the DMA events stream gives it, which name no channel."""
+    from aie import ir
+    from aie.dialects import aie
+    from aie.extras.context import mlir_mod_ctx
+
+    with mlir_mod_ctx():
+        module = ir.Module.parse(mlir_text)
+        for device in module.body.operations:
+            for trace in device.regions[0].blocks[0].operations:
+                if trace.operation.name != "aie.trace":
+                    continue
+                body = trace.regions[0].blocks[0]
+                ops = {op.operation.name: op for op in body.operations}
+                packet = ops.get("aie.trace.packet")
+                if packet is None or (
+                    ir.IntegerAttr(packet.operation.attributes["type"]).value
+                    != _MEMTILE_PACKET
+                ):
+                    continue
+                for op in list(body.operations):
+                    if op.operation.name == "aie.trace.event":
+                        op.operation.erase()
+                with ir.InsertionPoint(ops["aie.trace.start"]):
+                    for slot, (direction, channel) in enumerate(ports):
+                        aie.trace_port(
+                            slot,
+                            aie.WireBundle.DMA,
+                            channel,
+                            getattr(aie.DMAChannelDir, direction),
+                        )
+                    for slot in range(_EVENT_SLOTS):
+                        aie.trace_event(
+                            f"PORT_RUNNING_{slot}" if slot < len(ports) else "NONE"
+                        )
+        return str(module)
 
 
 def digest(mlir_text: str) -> str:
@@ -120,3 +167,25 @@ def trace_size() -> int:
 def trace_tiles() -> int:
     """How many tiles to trace. Routing, not the packet id space, is the real limit."""
     return int(os.environ.get("IRON_TRACE_NTILES", "4"))
+
+
+def traced_ports() -> tuple[tuple[str, int], ...]:
+    """The DMA ports a traced memory tile watches, from ``IRON_TRACE_PORTS="S2MM:0,MM2S:0"``,
+    eight at most; empty keeps the events stream gives it."""
+    spec = os.environ.get("IRON_TRACE_PORTS", "")
+    ports = tuple(
+        (direction, int(channel))
+        for direction, channel in (port.split(":") for port in spec.split(",") if port)
+    )
+    if len(ports) > _EVENT_SLOTS:
+        raise ValueError(f"a trace unit watches {_EVENT_SLOTS} ports, not {len(ports)}")
+    return ports
+
+
+def traced_tiles() -> tuple[tuple[int, int], ...]:
+    """The (column, row) tiles to trace, from ``IRON_TRACE_TILES="col,row;col,row"``; empty
+    leaves the choice to stream. A memory tile in the list is traced at its DMA."""
+    spec = os.environ.get("IRON_TRACE_TILES", "")
+    return tuple(
+        tuple(int(v) for v in tile.split(",")) for tile in spec.split(";") if tile
+    )
