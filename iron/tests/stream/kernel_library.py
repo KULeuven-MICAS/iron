@@ -93,10 +93,8 @@ def test_the_layout_block_is_the_block_the_source_is_compiled_at():
 
 @pytest.mark.parametrize("block", [32, 64])
 def test_the_mha_object_is_built_for_the_block_it_is_named_for(block):
-    from iron.common.stream.ops import _mha_artifacts
-
     root = AIEContext().kernels_dir
-    objects = _mha_artifacts(root, "aie2p", m=block)
+    objects = artifacts_for_object(f"mha_{block}.o", root, "aie2p")
     names = [artifact.filename for artifact in objects]
     assert f"mha_{block}.o" in names
     flags = [
@@ -106,8 +104,17 @@ def test_the_mha_object_is_built_for_the_block_it_is_named_for(block):
 
 
 def test_the_gemm_object_is_built_for_the_shape_it_is_named_for():
-    from iron.common.stream.ops import _gemm_artifacts
-
     root = AIEContext().kernels_dir
-    objects = _gemm_artifacts(root, "aie2p", 32, 64, 64)
+    objects = artifacts_for_object("mm_32_64_64.o", root, "aie2p")
     assert any(a.filename == "mm_32_64_64.o" for a in objects)
+
+
+@pytest.mark.parametrize(
+    "name, flag",
+    [("silu_1x4096.o", "-DSILU_ELEMS=4096"), ("mul_2x2048.o", "-DMUL_ELEMS=4096")],
+)
+def test_an_elementwise_object_is_compiled_for_the_elements_a_call_takes(name, flag):
+    """Left to its run-time size the loop does not pipeline, and SiLU takes twice as long."""
+    (artifact,) = artifacts_for_object(name, AIEContext().kernels_dir, "aie2p")
+    assert artifact.filename == name
+    assert flag in artifact.extra_flags
