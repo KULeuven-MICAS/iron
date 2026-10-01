@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (C) 2026 KU Leuven (MICAS). All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Reference attention core for one head: ``softmax(q @ k_t) @ v``.
+"""Reference attention core: ``softmax(q @ k_t) @ v`` for every head at once.
 
 Running this module produces the golden output; exporting it produces the workload
 stream-dse generates the design from. Two things the caller does rather than the graph:
@@ -34,7 +34,8 @@ RESULT_NAMES = {SCORES_NODE: SCORES, SOFTMAX_NODE: PROBABILITIES, CONTEXT_NODE: 
 
 
 class AttentionCore(nn.Module):
-    """One head's scores, softmax and context, over a pre-scaled ``q``.
+    """Each head's scores, softmax and context, over a pre-scaled ``q``; the heads are
+    the leading axis of every operand.
 
     ``causal`` masks every key at a later position than its query; the mask is additive,
     so it survives the export as an ordinary operand.
@@ -84,13 +85,12 @@ def query_scale(d_head: int) -> float:
 def generate_golden_reference(
     seq_len, d_head, heads=1, seed=42, dtype=torch.bfloat16, causal=False
 ):
-    """Golden operands and output per head, with the query already scaled."""
+    """Golden operands and output, the heads leading and the query already scaled."""
     generator = torch.Generator().manual_seed(seed)
     shape = (heads, seq_len, d_head)
     q = torch.randn(shape, generator=generator).to(dtype) * query_scale(d_head)
     k = torch.randn(shape, generator=generator).to(dtype)
     v = torch.randn(shape, generator=generator).to(dtype)
-    k_t = k.transpose(1, 2).contiguous()
-    core = attention_core_module(causal)
-    context = torch.stack([core(q[h], k_t[h], v[h]) for h in range(heads)])
+    k_t = k.transpose(-2, -1).contiguous()
+    context = attention_core_module(causal)(q, k_t, v)
     return {QUERY: q, KEY_TRANSPOSED: k_t, VALUE: v, CONTEXT: context}
