@@ -31,7 +31,7 @@ ACCELERATOR = os.path.join(
 )
 BACKEND = os.environ.get("STREAM_BACKEND", "ortools_gscip")
 OUTPUT_ROOT = "outputs"
-PORT_ACTIVITY = "port_activity.json"
+ESTIMATE = "estimate.json"
 # Reports what every tile DMA, the shim's measured bandwidth and each link carry per iteration;
 # with neither bound set it adds no constraint, so the design stream returns is unchanged.
 PORT_REPORT = {"memory_ports": {"interval": False, "burst": False}}
@@ -107,7 +107,7 @@ def run_codegen(
     experiment_id: str, workload_path, mapping_path, npu: str, kernel_library=None
 ) -> None:
     """Solve the allocation, write each fused group's MLIR under the design directory, and
-    record the groups' port activity beside it."""
+    record stream's estimate of it beside them."""
     from stream.api import generate_code
 
     estimate = generate_code(
@@ -117,19 +117,30 @@ def run_codegen(
         str(mapping_path),
         solve_options(npu, kernel_library),
     )
-    write_port_activity(
-        design_dir(experiment_id), estimate.context.get("group_allocations")
-    )
+    write_estimate(design_dir(experiment_id), estimate)
 
 
-def write_port_activity(directory: str, group_allocations: dict) -> None:
-    """Per fused group, stream's port-activity rows (busiest first): bits per iteration against
-    each resource's bandwidth and the initiation interval."""
-    rows = {
-        f"group_{index}": ((allocation or {}).get("performance") or {}).get(
-            "memory_ports", []
+def write_estimate(directory: str, estimate) -> None:
+    """stream's cycles for one run of the design, per fused group and for the dispatch, and per
+    group its steady-state latency and port-activity rows (busiest first): bits per iteration
+    against each resource's bandwidth and the initiation interval."""
+    performance = {
+        index: (allocation or {}).get("performance") or {}
+        for index, allocation in sorted(
+            estimate.context.get("group_allocations").items()
         )
-        for index, allocation in sorted(group_allocations.items())
     }
-    with open(os.path.join(directory, PORT_ACTIVITY), "w") as f:
-        json.dump(rows, f, indent=1)
+    record = {
+        "cycles": estimate.cycles,
+        "group_cycles": list(estimate.group_cycles),
+        "dispatch_cycles": estimate.dispatch_cycles,
+        "groups": {
+            f"group_{index}": {
+                "latency": view.get("latency"),
+                "port_activity": view.get("memory_ports", []),
+            }
+            for index, view in performance.items()
+        },
+    }
+    with open(os.path.join(directory, ESTIMATE), "w") as f:
+        json.dump(record, f, indent=1)
