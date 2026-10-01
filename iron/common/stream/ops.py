@@ -43,7 +43,7 @@ def custom_op(name: str) -> Op:
 _INTRINSICS = {"aie2p": "aie2pintrin.h"}
 
 
-def _mha_artifacts(kernels_dir, kernel_dir, m: int):
+def _mha_artifacts(name, kernels_dir, kernel_dir, m: int):
     """``mha.cc``'s object: every entry point one online-softmax step calls.
 
     One translation unit holds the partial softmax, the value accumulation, the rescale
@@ -67,7 +67,7 @@ def _mha_artifacts(kernels_dir, kernel_dir, m: int):
             extra_flags=["-DBIT_WIDTH=16"],
         ),
         KernelObjectArtifact(
-            f"mha_{m}.o",
+            name,
             dependencies=[
                 SourceArtifact(kernels_dir / "linalg" / "mha.cc"),
                 SourceArtifact(zero_source),
@@ -90,7 +90,7 @@ def _mha_artifacts(kernels_dir, kernel_dir, m: int):
     ]
 
 
-def _gemm_artifacts(kernels_dir, kernel_dir, m: int, k: int, n: int):
+def _gemm_artifacts(name, kernels_dir, kernel_dir, m: int, k: int, n: int):
     """The ``mm.cc`` object specialized for one tile shape, with zero.cc folded in.
 
     stream-dse emits dimension-suffixed symbols so GEMMs of different tile shapes
@@ -108,7 +108,7 @@ def _gemm_artifacts(kernels_dir, kernel_dir, m: int, k: int, n: int):
     zero_source = kernels_dir / "zero" / "zero.cc"
     return [
         KernelObjectArtifact(
-            f"mm_{suffix}.o",
+            name,
             dependencies=[
                 SourceArtifact(kernels_dir / "linalg" / "mm.cc"),
                 SourceArtifact(zero_source),
@@ -137,7 +137,44 @@ def _gemm_artifacts(kernels_dir, kernel_dir, m: int, k: int, n: int):
     ]
 
 
-_BUILDERS = {"mm.cc": _gemm_artifacts, "mha.cc": _mha_artifacts}
+def _sized(factory):
+    """An elementwise object compiled for the elements one call takes, as its mlir-aie
+    factory compiles it: with the count known at compile time the loop pipelines, where
+    a count only known at run time leaves the call twice as long."""
+
+    def build(name, kernels_dir, kernel_dir, m: int, n: int):
+        from iron.common.compilation import KernelObjectArtifact, SourceArtifact
+
+        fn = factory(m * n)
+        return [
+            KernelObjectArtifact(
+                name,
+                dependencies=[SourceArtifact(Path(fn.source_file))],
+                extra_flags=[*fn.compile_flags, *(f"-I{d}" for d in fn.include_dirs)],
+            )
+        ]
+
+    return build
+
+
+def _silu(elements):
+    from aie.iron.kernels import activation
+
+    return activation.silu_sized(elements)
+
+
+def _mul(elements):
+    from aie.iron.kernels import eltwise
+
+    return eltwise.mul_sized(elements)
+
+
+_BUILDERS = {
+    "mm.cc": _gemm_artifacts,
+    "mha.cc": _mha_artifacts,
+    "silu.cc": _sized(_silu),
+    "mul.cc": _sized(_mul),
+}
 
 
 def linked_objects(mlir_text: str) -> list[str]:
@@ -159,7 +196,7 @@ def artifacts_for_object(name: str, kernels_dir, kernel_dir) -> list:
         if spec.object is None or (shape := _object_shape(spec.object, name)) is None:
             continue
         if build := _BUILDERS.get(Path(spec.source).name):
-            return build(kernels_dir, kernel_dir, **shape)
+            return build(name, kernels_dir, kernel_dir, **shape)
         source = SourceArtifact(kernels_dir / spec.source)
         return [KernelObjectArtifact(name, dependencies=[source])]
     raise ValueError(f"no rule builds the kernel object {name!r}")
