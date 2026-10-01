@@ -25,6 +25,7 @@ class _SwiGLUStreamGroup(StreamGroup):
     hidden_dim: int
     k: int
     group_index: int
+    gemm_block: tuple[int, int, int] | None = None
     context: Any = field(default=None, repr=False, compare=False)
 
     def __post_init__(self):
@@ -43,19 +44,20 @@ class _SwiGLUStreamGroup(StreamGroup):
             "embedding_dim": self.embedding_dim,
             "hidden_dim": self.hidden_dim,
             "npu": aie_utils.get_current_device().resolve().name,
+            "gemm_block": self.gemm_block,
         }
 
     def _ports(self):
         dims = (self.seq_len, self.embedding_dim, self.hidden_dim)
         return (
             self._design.workload_for(*dims).shapes,
-            self._design.group_ports(*dims, self.k, self._dims()["npu"])[
-                self.group_index
-            ],
+            self._design.group_ports(
+                *dims, self.k, self._dims()["npu"], self.gemm_block
+            )[self.group_index],
         )
 
 
-def _wiring(seq_len, embedding_dim, hidden_dim, k):
+def _wiring(seq_len, embedding_dim, hidden_dim, k, gemm_block):
     """Each group's arguments, and the operator's own inputs and outputs.
 
     A group's arguments are the tensors it consumes and produces, in the order the
@@ -66,7 +68,7 @@ def _wiring(seq_len, embedding_dim, hidden_dim, k):
     from iron.operators.swiglu_prefill_stream.stream_design import group_ports
 
     npu = aie_utils.get_current_device().resolve().name
-    boundaries = group_ports(seq_len, embedding_dim, hidden_dim, k, npu)
+    boundaries = group_ports(seq_len, embedding_dim, hidden_dim, k, npu, gemm_block)
     produced = {name for _, outputs in boundaries for name in outputs}
     consumed = {name for inputs, _ in boundaries for name in inputs}
     ports = [inputs + outputs for inputs, outputs in boundaries]
@@ -88,7 +90,9 @@ class SwiGLUPrefillStream(OperatorSequence):
     :mod:`iron.operators.swiglu_prefill` does. Left ``None``, stream prices the
     whole-chain and layer-by-layer candidates, each by the solve the deployed
     build runs plus its dispatch overhead, and builds the winner. The external
-    buffers are the same either way.
+    buffers are the same either way. ``gemm_block`` pins the GEMM block as
+    (sequence, embedding, hidden); left ``None``, the build takes the largest that
+    fits.
 
     Runtime buffers (``get_callable().get_buffer(name)``) are named by the reference
     module: ``input``, ``w_gate``, ``w_up``, ``w_down``, ``output``. Building
@@ -104,10 +108,13 @@ class SwiGLUPrefillStream(OperatorSequence):
         k=None,
         context=None,
         share_designs=True,
+        gemm_block=None,
     ):
         from iron.common.stream.design import trace_size
 
-        ports, inputs, outputs = _wiring(seq_len, embedding_dim, hidden_dim, k)
+        ports, inputs, outputs = _wiring(
+            seq_len, embedding_dim, hidden_dim, k, gemm_block
+        )
         groups = [
             _SwiGLUStreamGroup(
                 seq_len=seq_len,
@@ -115,12 +122,17 @@ class SwiGLUPrefillStream(OperatorSequence):
                 hidden_dim=hidden_dim,
                 k=k,
                 group_index=index,
+                gemm_block=gemm_block,
                 context=context,
             )
             for index in range(len(ports))
         ]
         super().__init__(
-            name=f"swiglu_prefill_stream_k{'auto' if k is None else k}_m{seq_len}_e{embedding_dim}_h{hidden_dim}",
+            name=(
+                f"swiglu_prefill_stream_k{'auto' if k is None else k}"
+                f"{'' if gemm_block is None else '_b' + 'x'.join(map(str, gemm_block))}"
+                f"_m{seq_len}_e{embedding_dim}_h{hidden_dim}"
+            ),
             runlist=[
                 (group, *group_ports) for group, group_ports in zip(groups, ports)
             ],

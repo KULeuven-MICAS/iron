@@ -97,7 +97,7 @@ def _row_width(hidden_dim):
     return max(w for w in range(ELEMENTWISE_WIDTH, 0, -1) if hidden_dim % w == 0)
 
 
-def partition_layers(seq_len, embedding_dim, hidden_dim, npu, k):
+def partition_layers(seq_len, embedding_dim, hidden_dim, npu, k, gemm_block=None):
     """The layers of each fused group: declared for an explicit ``k``, solved otherwise.
 
     With ``k=None`` stream prices the candidate partitions, each by the solve the
@@ -106,12 +106,10 @@ def partition_layers(seq_len, embedding_dim, hidden_dim, npu, k):
     """
     if k is not None:
         return GROUP_LAYERS[k]
-    marker = (
-        Path(design_dir(_experiment_id(seq_len, embedding_dim, hidden_dim, k)))
-        / "partition.json"
-    )
+    eid = _experiment_id(seq_len, embedding_dim, hidden_dim, k, gemm_block)
+    marker = Path(design_dir(eid)) / "partition.json"
     if not marker.exists():
-        _run_codegen(seq_len, embedding_dim, hidden_dim, npu, k)
+        _run_codegen(seq_len, embedding_dim, hidden_dim, npu, k, gemm_block)
     return [list(group) for group in json.loads(marker.read_text())["groups"]]
 
 
@@ -188,7 +186,7 @@ def workload_for(seq_len, embedding_dim, hidden_dim):
     )
 
 
-def group_ports(seq_len, embedding_dim, hidden_dim, k=1, npu="npu2"):
+def group_ports(seq_len, embedding_dim, hidden_dim, k=1, npu="npu2", gemm_block=None):
     """Per fused group, the tensor names it takes in and hands on.
 
     These are the operator's runtime arguments, including the tensors a split
@@ -196,7 +194,7 @@ def group_ports(seq_len, embedding_dim, hidden_dim, k=1, npu="npu2"):
     """
     return group_boundaries(
         workload_for(seq_len, embedding_dim, hidden_dim),
-        partition_layers(seq_len, embedding_dim, hidden_dim, npu, k),
+        partition_layers(seq_len, embedding_dim, hidden_dim, npu, k, gemm_block),
     )
 
 
@@ -218,23 +216,31 @@ def build_inputs(
     )
 
 
-def _experiment_id(seq_len, embedding_dim, hidden_dim, k):
+def _blocks(gemm_block):
+    """The GEMM blocks a build may take, largest first: only the caller's when pinned."""
+    return GEMM_BLOCKS if gemm_block is None else (tuple(gemm_block),)
+
+
+def _experiment_id(seq_len, embedding_dim, hidden_dim, k, gemm_block=None):
     suffix = "_kauto" if k is None else (f"_k{k}" if k > 1 else "")
+    if gemm_block is not None:
+        suffix += f"_b{'x'.join(map(str, gemm_block))}"
     return experiment_id("swiglu", f"{seq_len}_{embedding_dim}_{hidden_dim}", suffix)
 
 
-def _run_codegen(seq_len, embedding_dim, hidden_dim, npu, k):
+def _run_codegen(seq_len, embedding_dim, hidden_dim, npu, k, gemm_block=None):
     """Build with the largest block the solve accepts; the last candidate must hold.
 
     With ``k=None`` every (partition, block) pair a problem size allows becomes a
     candidate mapping, and stream's priced search picks among them.
     """
-    eid = _experiment_id(seq_len, embedding_dim, hidden_dim, k)
+    eid = _experiment_id(seq_len, embedding_dim, hidden_dim, k, gemm_block)
+    blocks = _blocks(gemm_block)
     if k is None:
         base = Path(design_dir(eid))
         candidates, errors = [], []
         for candidate_k in (1, LAYER_BY_LAYER):
-            for block in GEMM_BLOCKS:
+            for block in blocks:
                 candidate_dir = (
                     base / f"candidate_k{candidate_k}_b{'x'.join(map(str, block))}"
                 )
@@ -261,32 +267,39 @@ def _run_codegen(seq_len, embedding_dim, hidden_dim, npu, k):
             json.dumps({"groups": [group["layers"] for group in groups]})
         )
         return
-    for block in GEMM_BLOCKS:
+    for block in blocks:
         workload_path, mapping_path = build_inputs(
             seq_len, embedding_dim, hidden_dim, design_dir(eid), k=k, block=block
         )
         try:
             run_codegen(eid, workload_path, mapping_path, npu)
         except RuntimeError as error:
-            if block is GEMM_BLOCKS[-1]:
+            if block == blocks[-1]:
                 raise
             logger.info("Block %s does not fit (%s); trying the next", block, error)
             continue
         return
 
 
-def _design_paths(seq_len, embedding_dim, hidden_dim, k, npu):
+def design_root(*, k, seq_len, embedding_dim, hidden_dim, npu, gemm_block=None):
+    """The directory stream writes this design and its estimate to."""
+    return design_dir(_experiment_id(seq_len, embedding_dim, hidden_dim, k, gemm_block))
+
+
+def _design_paths(seq_len, embedding_dim, hidden_dim, k, npu, gemm_block=None):
     return design_paths(
-        design_dir(_experiment_id(seq_len, embedding_dim, hidden_dim, k)),
-        len(partition_layers(seq_len, embedding_dim, hidden_dim, npu, k)),
+        design_dir(_experiment_id(seq_len, embedding_dim, hidden_dim, k, gemm_block)),
+        len(partition_layers(seq_len, embedding_dim, hidden_dim, npu, k, gemm_block)),
     )
 
 
-def _group_text(group_index, *, k, seq_len, embedding_dim, hidden_dim, npu) -> str:
+def _group_text(
+    group_index, *, k, seq_len, embedding_dim, hidden_dim, npu, gemm_block=None
+) -> str:
     return group_text(
         group_index,
-        _design_paths(seq_len, embedding_dim, hidden_dim, k, npu),
-        lambda: _run_codegen(seq_len, embedding_dim, hidden_dim, npu, k),
+        _design_paths(seq_len, embedding_dim, hidden_dim, k, npu, gemm_block),
+        lambda: _run_codegen(seq_len, embedding_dim, hidden_dim, npu, k, gemm_block),
     )
 
 
