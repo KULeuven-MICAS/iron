@@ -1,15 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (C) 2026 KU Leuven (MICAS). All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Emit the stream-dse mapping for an exported workload.
-
-An operator gives each node's kernel arguments and how nodes are fused
-(:class:`FusedGroup`); this module turns that into the mapping YAML stream-dse
-consumes, leaving where every node runs to stream. Node names are taken from the
-:class:`~iron.common.stream.workload.StreamWorkload` the ONNX was generated from,
-and every node is checked against it, so a mapping can never refer to a node the
-workload does not contain.
-"""
+"""Emit the stream-dse mapping YAML for an exported workload from each node's kernel
+arguments and its :class:`FusedGroup`, leaving placement to stream. Every node is checked
+against the :class:`~iron.common.stream.workload.StreamWorkload` the ONNX came from."""
 
 from __future__ import annotations
 
@@ -77,10 +71,8 @@ def build_mapping(
     kernel_kwargs: dict[str, dict],
     groups: Sequence[FusedGroup],
 ) -> dict:
-    """The mapping for ``workload`` as a plain dict (validated against it).
-
-    ``kernel_kwargs`` are the arguments of each node's stream-dse kernel, e.g. a
-    GEMM's tile shape. stream's placement stage derives every node's cores.
+    """The mapping for ``workload`` as a plain dict, validated against it.
+    ``kernel_kwargs`` are each node's stream-dse kernel arguments, e.g. a GEMM's tile.
     """
     kernel_of = dict(workload.nodes)
     unknown = set(kernel_kwargs) - set(kernel_of)

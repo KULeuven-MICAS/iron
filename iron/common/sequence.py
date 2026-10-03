@@ -89,13 +89,8 @@ class SequenceDispatch:
 
 
 class AutoDispatch(SequenceDispatch):
-    """Selects the flow by what a dispatch must reconfigure.
-
-    On NPU2 a runlist of one step compiles to an xclbin whose hardware context
-    configures the array once; the full-ELF flow replays the whole array configuration
-    on every dispatch, which a single-design workload never needs. Everything else
-    takes the full ELF, and other platforms the chained xclbins.
-    """
+    """Selects full-ELF on NPU2 (one xclbin for a runlist of one step) and
+    chained xclbins elsewhere; the full ELF reconfigures the array on every dispatch."""
 
     name = "auto"
 
@@ -125,10 +120,8 @@ def _hand_built_kernels(op, objs=None):
 
 class FusedDispatch(SequenceDispatch):
     """Single-ELF dispatch (NPU2 only): all operators fused into one ELF.
-
-    ``single_design_xclbin`` lets a runlist of one step take the xclbin flow instead,
-    configuring the array once at context creation rather than on every dispatch.
-    """
+    ``single_design_xclbin`` compiles a runlist of one step to one xclbin instead,
+    which configures the array once, at context creation."""
 
     name = "fused"
 
@@ -147,18 +140,7 @@ class FusedDispatch(SequenceDispatch):
         self._single = None
         if self._single_design_xclbin and not seq.trace_size and len(seq.runlist) == 1:
             op, *entry_names = seq.runlist[0]
-            mlir_artifact = op.get_mlir_artifact()
-            kernels = op.get_kernel_artifacts()
-            xclbin_artifact = comp.XclbinArtifact(
-                f"{seq.name}.xclbin",
-                mlir_input=mlir_artifact,
-                dependencies=[mlir_artifact] + kernels,
-            )
-            insts_artifact = comp.InstsBinArtifact(
-                f"{seq.name}_insts.bin",
-                mlir_input=mlir_artifact,
-                dependencies=[mlir_artifact],
-            )
+            xclbin_artifact, insts_artifact = op.get_artifacts(prefix=f"{seq.name}_")
             seq.add_artifacts([xclbin_artifact, insts_artifact])
             self._single = (entry_names, xclbin_artifact, insts_artifact)
             return
@@ -345,8 +327,7 @@ class OperatorSequence(AIEOperatorBase):
     Args:
         dispatch: Dispatch strategy, given either as a mode name or as a
             :class:`SequenceDispatch` instance. Recognised names:
-            ``"auto"`` (default) selects ``"fused"`` on NPU2, where a
-            runlist of one step compiles to one xclbin instead, and
+            ``"auto"`` (default) selects ``"fused"`` on NPU2 and
             ``"separate"`` on NPU1.  ``"fused"`` uses a single-ELF
             dispatch (requires NPU2).  ``"separate"`` compiles each
             sub-operator to its own xclbin and invokes them sequentially.
@@ -909,10 +890,8 @@ class SequenceReferenceCallable(_PerBufferCallable):
 
 
 class SequenceSingleXclbinCallable(SequenceXclbinCallable):
-    """A runlist of one step: one xclbin, one dispatch per call.
-
-    The hardware context configures the array when it is created, so a dispatch
-    streams instructions only.
+    """A runlist of one step: one xclbin, one dispatch per call. The hardware
+    context configures the array when created, so a dispatch streams instructions only.
     """
 
     def __init__(self, op, entry_names, xclbin_artifact, insts_artifact):

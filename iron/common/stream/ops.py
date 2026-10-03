@@ -1,12 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (C) 2026 KU Leuven (MICAS). All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Registry binding torch operators to their ONNX form and the stream-dse kernel that runs them.
-
-Ops stream-dse implements with a fused kernel but ONNX has no operator for are declared
-with :func:`custom_op`, so the exporter emits them as a single node. What each kernel
-compiles, links and costs is the kernel library's, in ``iron/common/stream/kernels/<dir>.toml``.
-"""
+"""Registry binding torch operators to their ONNX form and their stream-dse kernel.
+Fused kernels with no ONNX operator are declared with :func:`custom_op`, so the exporter
+emits them as one node; ``kernels/<dir>.toml`` describes each kernel."""
 
 from __future__ import annotations
 
@@ -44,18 +41,9 @@ _INTRINSICS = {"aie2p": "aie2pintrin.h"}
 
 
 def _mha_artifacts(name, kernels_dir, kernel_dir, m: int):
-    """``mha.cc``'s object: every entry point one online-softmax step calls.
-
-    One translation unit holds the partial softmax, the value accumulation, the rescale
-    and zero.cc's entry point, and both cores of a step link against it. Beside it, the
-    vectorized copy that snapshots the running scale off the softmax core.
-
-    The key block and the head are fixed by the library (``fixed_dims("matmul_PV")``),
-    but the query block varies, and
-    matmul_PV's accumulation is compiled for it: at DIM_M=64 against a 32-row block it
-    would write 64 rows into a 32-row buffer. So the object is specialized on the query
-    block and named for it, the way the GEMM objects are.
-    """
+    """``mha.cc`` with zero.cc, linked by both cores of an online-softmax step, plus the
+    copy that snapshots the running scale. Specialized and named on the query block ``m``,
+    which matmul_PV's accumulation is compiled for; the key block and head are fixed."""
     from iron.common.compilation import KernelObjectArtifact, SourceArtifact
 
     fixed = fixed_dims("matmul_PV", kernel_dir)
@@ -91,17 +79,9 @@ def _mha_artifacts(name, kernels_dir, kernel_dir, m: int):
 
 
 def _gemm_artifacts(name, kernels_dir, kernel_dir, m: int, k: int, n: int):
-    """The ``mm.cc`` object specialized for one tile shape, with zero.cc folded in.
-
-    stream-dse emits dimension-suffixed symbols so GEMMs of different tile shapes
-    coexist in one design (``GemmKernel.function_name``/``zero_name``); rename the
-    unsuffixed symbols to match.
-
-    It also sets one ``link_with`` per core, naming ``GemmKernel.linkwith_name``,
-    so everything a core calls has to be in this one object. mm.cc no longer
-    carries the zero entry point, so ``-include`` compiles zero.cc into the same
-    translation unit rather than leaving it in an object nothing would link.
-    """
+    """``mm.cc`` for one tile shape, with zero.cc compiled into the same object since a
+    core links one object. Symbols are renamed to stream-dse's dimension-suffixed ones, so
+    GEMMs of different tile shapes coexist in one design."""
     from iron.common.compilation import KernelObjectArtifact, SourceArtifact
 
     suffix = f"{m}_{k}_{n}"
@@ -208,13 +188,9 @@ PartialSoftmax = custom_op("PartialSoftmax")
 
 @torch.library.custom_op("iron_stream::partial_softmax", mutates_args=())
 def partial_softmax(x: torch.Tensor) -> torch.Tensor:
-    """One online-softmax step over a key block: exponentials, left unnormalised.
-
-    The running row maximum and sum, the causal mask and the final division are all
-    the kernel's own business, so this is the whole of what the graph says about the
-    step: an elementwise node, whose key axis therefore carries no reduction and is
-    free to be blocked.
-    """
+    """One online-softmax step over a key block: exponentials, left unnormalised. The
+    kernel owns the running max and sum, the causal mask and the division, so the graph
+    sees an elementwise node whose key axis is free to be blocked."""
     return torch.exp(x - x.amax(dim=-1, keepdim=True))
 
 

@@ -3,20 +3,9 @@
 
 """Generate the SwiGLU-prefill design with stream-dse.
 
-Both inputs stream-dse needs are produced here, from IRON:
-
-* the **workload**, exported from :mod:`~iron.operators.swiglu_prefill_stream.reference`,
-  the same module the test checks the result against;
-* the **mapping**, from each layer's kernel arguments below.
-
-Both are written into the experiment's output directory at build time, never into
-the source tree, and the mapping's node names come from the exported workload, so
-the two cannot disagree. stream-dse then solves the allocation and emits the MLIR.
-
-This module is imported lazily (by ``DesignGenerator`` at compile time), so
-importing the operator does not require ``stream-dse`` to be installed, only
-building it does.
-"""
+The workload is exported from :mod:`~iron.operators.swiglu_prefill_stream.reference` and
+the mapping from each layer's kernel arguments, both into the experiment's output
+directory; the mapping's node names come from the workload. Imported lazily at build."""
 
 import json
 import logging
@@ -98,11 +87,8 @@ def _row_width(hidden_dim):
 
 
 def partition_layers(seq_len, embedding_dim, hidden_dim, npu, k, gemm_block=None):
-    """The layers of each fused group: declared for an explicit ``k``, solved otherwise.
-
-    With ``k=None`` stream prices the candidate partitions, each by the solve the
-    deployed build runs plus the dispatch overhead of its groups, and the winner's
-    groups are kept in ``partition.json`` beside the design.
+    """The layers of each fused group: declared for an explicit ``k``; for ``None``, the
+    partition stream prices cheapest (solve plus dispatch overhead), from ``partition.json``.
     """
     if k is not None:
         return GROUP_LAYERS[k]
@@ -114,11 +100,8 @@ def partition_layers(seq_len, embedding_dim, hidden_dim, npu, k, gemm_block=None
 
 
 def _kernel_kwargs(k, hidden_dim, block):
-    """Each layer's kernel arguments; where the layers run is stream's to derive.
-
-    Split per layer, the elementwise kernels read whole rows so their transfers to and
-    from memory are contiguous; fused behind a GEMM they take the block that GEMM
-    writes, in the layout it writes it.
+    """Each layer's kernel arguments. Split per layer, the elementwise kernels read whole
+    rows so their transfers are contiguous; fused behind a GEMM they take its output block.
     """
     tiles = gemm_blocks(block)
 
@@ -230,9 +213,7 @@ def _experiment_id(seq_len, embedding_dim, hidden_dim, k, gemm_block=None):
 
 def _run_codegen(seq_len, embedding_dim, hidden_dim, npu, k, gemm_block=None):
     """Build with the largest block the solve accepts; the last candidate must hold.
-
-    With ``k=None`` every (partition, block) pair a problem size allows becomes a
-    candidate mapping, and stream's priced search picks among them.
+    With ``k=None`` every allowed (partition, block) pair is a candidate stream picks from.
     """
     eid = _experiment_id(seq_len, embedding_dim, hidden_dim, k, gemm_block)
     blocks = _blocks(gemm_block)
@@ -309,9 +290,6 @@ def group_digest(group_index, **dims) -> str:
 
 
 def load_group(group_index, func_prefix="", **dims):
-    """Generate the ``k``-group design once and return one group's aie module.
-
-    ``group_index`` selects the group, in the order :data:`GROUP_LAYERS` lists them.
-    ``func_prefix`` is injected by ``OperatorSequence``.
-    """
+    """Generate the ``k``-group design once and return group ``group_index``'s aie module;
+    ``func_prefix`` is injected by ``OperatorSequence``."""
     return region_module(_group_text(group_index, **dims), func_prefix)

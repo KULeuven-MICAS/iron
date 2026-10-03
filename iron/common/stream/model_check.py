@@ -1,20 +1,11 @@
 # SPDX-FileCopyrightText: Copyright (C) 2026 KU Leuven (MICAS). All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Check stream-dse's estimate of the generated operators against the NPU.
+"""Check stream-dse's estimates of the generated operators against the NPU.
 
-``sweep`` deploys each operator at each point as stream chooses it and as every candidate
-it chooses between, times each, and records stream's estimate beside the measurement.
-With ``--trace`` it also deploys traced builds of stream's own choice that count the
-cycles each traced memory tile's DMA channels run. Records are appended to
-``records.jsonl`` and a point already recorded is not deployed again. ``report`` reads them
-back into whether stream chose the fastest candidate, how far each estimate is from the
-measured latency, and how the bits stream priced through each memory tile compare with the
-traced ones.
-
-    python -m iron.common.stream.model_check sweep OUT [--operators mha swiglu] [--trace]
-    python -m iron.common.stream.model_check report OUT
-"""
+``sweep OUT [--operators mha swiglu] [--trace]`` times stream's choice and every candidate
+per point into ``OUT/records.jsonl``; ``report OUT`` compares the choice, latency estimates
+and (traced) memory tile traffic with the measurements."""
 
 import argparse
 import fcntl
@@ -519,7 +510,7 @@ def report(out):
     if failed:
         lines += ["", "## Not deployed", ""]
         lines += [
-            f"- {_shape(r)} seq {r['point']['seq_len']} {_label(r['candidate'])}: "
+            f"- {_shape(r)} seq {r['point'].get('seq_len', '-')} {_label(r['candidate'])}: "
             f"{r['error'].splitlines()[0]}"
             for r in failed
         ]

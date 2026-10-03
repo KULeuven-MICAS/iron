@@ -1,13 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (C) 2026 KU Leuven (MICAS). All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The device's compute grid, in stream's core ids.
-
-stream identifies a tile by an integer core id, which says nothing on its own.
-mlir-aie's :class:`~aie.iron.device.Device` knows the grid and the type of every
-tile in it; this turns that into columns of core ids, so no other IRON module has
-to know what a stream core id means.
-"""
+"""The device's compute grid as columns of stream's integer core ids, derived from
+mlir-aie's :class:`~aie.iron.device.Device`, so no other IRON module has to know what a
+stream core id means."""
 
 from __future__ import annotations
 

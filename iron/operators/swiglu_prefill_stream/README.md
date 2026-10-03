@@ -66,20 +66,11 @@ Designs that come out byte-identical are built and configured once: at k=5 the g
 up projections are the same design, so the ELF holds four rather than five. Set
 `share_designs=False` on the operator to switch that off.
 
-## Expected performance
+## Measuring
 
-Steady-state latency of `k=None` against the hand-written
-[`swiglu_prefill`](../swiglu_prefill), fastest sustained window of repeated dispatches
-on NPU2, in microseconds.
-
-| embedding / hidden | seq 256 | 512 | 1024 | 2048 | 4096 |
-| --- | --- | --- | --- | --- | --- |
-| 1024 / 4096, hand-written | 2016 | 3120 | 5478 | 9978 | 18910 |
-| 1024 / 4096, `k=None` | 2089 | 3149 | 5590 | 9878 | 18753 |
-| 2048 / 8192, hand-written | 5661 | 10558 | 19642 | 38655 | 77567 |
-| 2048 / 8192, `k=None` | 5696 | 10342 | 19395 | 37257 | 74071 |
-
-The generated block is within 5% of the hand-written operator at every size.
+`python -m iron.common.stream.model_check sweep OUT --operators swiglu` times the design
+stream chooses and every candidate on the NPU; `report OUT` compares them with stream's
+estimates.
 
 ## Runtime buffers
 

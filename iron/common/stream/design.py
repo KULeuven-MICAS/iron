@@ -1,13 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (C) 2026 KU Leuven (MICAS). All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Loading stream-dse generated designs into IRON.
-
-Everything here is independent of which operator generated the design, so a
-stream-backed operator's own module holds only its workload, its mapping and the
-dimensions they are built for. ``iron/tests/stream/groups.py`` fails a design module
-that redefines any of these instead of importing them.
-"""
+"""Loading stream-dse generated designs into IRON, independent of the operator; a
+stream-backed operator's module holds only its workload, mapping and dimensions."""
 
 import hashlib
 import os
@@ -35,14 +30,8 @@ _EVENT_SLOTS = 8
 
 @lru_cache(maxsize=None)
 def stream_revision() -> str:
-    """Token for the installed stream package, which nothing else in the build observes.
-
-    A design is cached under its experiment id and rebuilt from the mtime of its own
-    ``stream_design.py``, so without this a stream-side change is served the design from
-    before it: its sources, and the hardware descriptions it prices against. Mtimes
-    rather than the checkout's commit: an edit that is not committed yet is exactly the
-    case that goes unnoticed.
-    """
+    """Token over the installed stream package's sources, so a stream-side change
+    rebuilds cached designs. File mtimes, not the commit, so uncommitted edits count."""
     import stream
 
     root = Path(stream.__file__).parent
@@ -55,12 +44,8 @@ def stream_revision() -> str:
 
 
 def prefixed(mlir_text: str, func_prefix: str) -> str:
-    """Apply a fused-operator ``func_prefix`` (``op<idx>_``) to a group's MLIR.
-
-    ``OperatorSequence`` renames each child's kernel object files and symbols so the
-    groups stay distinct inside one ELF; the group's MLIR must reference the same
-    prefixed names. Longest symbol first, so one symbol cannot prefix another.
-    """
+    """Apply ``OperatorSequence``'s ``func_prefix`` (``op<idx>_``) to a group's kernel
+    object files and symbols. Longest symbol first, so one cannot prefix another."""
     if not func_prefix:
         return mlir_text
     mlir_text = re.sub(
@@ -81,11 +66,8 @@ def prefixed(mlir_text: str, func_prefix: str) -> str:
 
 
 def region_module(mlir_text: str, func_prefix: str = ""):
-    """Parse a group's MLIR text into an ``aie`` module for fusion.
-
-    ``OperatorSequence`` consumes ``aie.DeviceOp`` objects, so the xDSL-emitted group
-    text is re-parsed with the mlir-aie bindings, after ``func_prefix`` rewriting.
-    """
+    """Parse a group's xDSL-emitted MLIR, after ``func_prefix`` rewriting, into an
+    ``aie`` module, since ``OperatorSequence`` consumes ``aie.DeviceOp`` objects."""
     from aie import ir
     from aie.extras.context import mlir_mod_ctx
 
@@ -102,11 +84,8 @@ def design_paths(output_dir: str, n_groups: int) -> list[str]:
 
 
 def group_text(group_index: int, paths: list[str], generate) -> str:
-    """One group's generated MLIR, generating the whole design first if any is missing.
-
-    Every group loader calls this; the first generates the design and the rest read the
-    files it wrote.
-    """
+    """One group's generated MLIR, generating the whole design first if any group's
+    file is missing."""
     if not all(os.path.exists(path) for path in paths):
         generate()
     text = Path(paths[group_index]).read_text()
@@ -135,6 +114,8 @@ def _watch_dma_ports(mlir_text: str, ports) -> str:
                     != _MEMTILE_PACKET
                 ):
                     continue
+                if "aie.trace.start" not in ops:
+                    raise ValueError("a memory tile trace has no aie.trace.start")
                 for op in list(body.operations):
                     if op.operation.name == "aie.trace.event":
                         op.operation.erase()
@@ -159,10 +140,8 @@ def digest(mlir_text: str) -> str:
 
 
 def trace_size() -> int:
-    """DDR trace buffer in bytes, 0 for an untraced build.
-
-    Opt-in: tracing adds a runtime-sequence argument, so it changes the ABI.
-    """
+    """DDR trace buffer in bytes, 0 for an untraced build. Opt-in: tracing adds a
+    runtime-sequence argument, so it changes the ABI."""
     return int(os.environ.get("IRON_TRACE_SIZE", "0"))
 
 
@@ -179,6 +158,9 @@ def traced_ports() -> tuple[tuple[str, int], ...]:
         (direction, int(channel))
         for direction, channel in (port.split(":") for port in spec.split(",") if port)
     )
+    bad = [direction for direction, _ in ports if direction not in ("S2MM", "MM2S")]
+    if bad:
+        raise ValueError(f"IRON_TRACE_PORTS directions must be S2MM or MM2S, not {bad}")
     if len(ports) > _EVENT_SLOTS:
         raise ValueError(f"a trace unit watches {_EVENT_SLOTS} ports, not {len(ports)}")
     return ports
