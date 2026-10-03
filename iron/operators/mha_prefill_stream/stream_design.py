@@ -1,13 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (C) 2026 KU Leuven (MICAS). All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""stream-dse design for the prefill attention core of every head.
-
-The workload and the mapping are both generated from
-:mod:`iron.operators.mha_prefill_stream.reference`, so the design, the golden output and
-the runtime arguments all carry the same names; ``README.md`` has the rest. Where each
-layer runs is stream's to derive.
-"""
+"""stream-dse design for the prefill attention core of every head. The workload and
+mapping come from :mod:`iron.operators.mha_prefill_stream.reference`, so the design, golden
+output and runtime arguments share names; placement is stream's to derive."""
 
 from functools import lru_cache
 from pathlib import Path
@@ -57,12 +53,8 @@ BYTES_PER_ELEMENT = 2  # bfloat16
 
 
 def flash_query_seed(query_block=None) -> int:
-    """The query block a flash mapping starts at: the caller's when pinned, otherwise the
-    finest one the kernels compile for.
-
-    stream-dse places and prices every block its kernels offer, so this only says where the
-    search starts and not what it returns: seq 256 gives the same design from either.
-    """
+    """The query block a flash mapping's search starts at: the caller's when pinned,
+    otherwise the finest one the kernels compile for."""
     return query_block or min(flash_blocks())
 
 
@@ -86,11 +78,9 @@ def query_per_core(seq_len):
 
 
 def query_tile(seq_len, k, flash=False, query_block=None):
-    """Query positions one core works at a time. Split off, a core takes its whole slice
-    at once: a second temporal loop beside the key one would put two variables in a reuse
-    window, which the object-fifo lowering does not express. Fused, the key and the value
-    are resident beside the tile, so the query is what iterates instead. Flash, the block
-    is what stream-dse searches and both the query and the key iterate."""
+    """Query positions one core works at a time: split off, its whole slice (the lowering
+    has one reuse variable per window); fused, a tile beside the resident key and value;
+    flash, the searched block."""
     if flash:
         return flash_query_seed(query_block)
     return FUSED_QUERY_TILE if k == 1 else query_per_core(seq_len)
@@ -103,14 +93,9 @@ def _softmax_rows(seq_len, k, flash=False, query_block=None):
 
 
 def _scores_tile(seq_len, d_head, k, flash=False, query_block=None):
-    """The score GEMM's (m, k, n).
-
-    Exactly one dimension may iterate, since a tensor gets one reuse variable. Fused, the
-    softmax behind it reduces a whole row, so the key has to come out whole and the query
-    is what streams. Split off, stream the key while it spans more than a block, otherwise
-    the contraction: streaming the query instead is expressible and builds, but the second
-    block onwards comes back wrong.
-    """
+    """The score GEMM's (m, k, n), of which one dimension iterates. Fused, the softmax
+    needs whole rows, so the query streams; split off, the key streams while it spans more
+    than a block, otherwise the contraction."""
     if flash:
         return flash_query_seed(query_block), d_head, FLASH_BLOCK
     query, key = query_tile(seq_len, k), seq_len

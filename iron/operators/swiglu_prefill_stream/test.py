@@ -16,6 +16,7 @@ pytest.importorskip(
 )
 
 from iron.operators.swiglu_prefill_stream.op import SwiGLUPrefillStream
+from iron.operators.swiglu_prefill_stream.stream_design import LAYER_BY_LAYER
 
 # The operator's design is generated from this module; the values it is checked
 # against come from swiglu_decode's reference, which it shares.
@@ -28,7 +29,7 @@ SEQ_LEN, EMBEDDING_DIM, HIDDEN_DIM = 256, 512, 2048
 
 # Fused groups to deploy the block as: the partition stream prices cheapest, one
 # design, a front end plus the down projection, or one design per layer.
-FUSION_GROUPS = [None, 1, 2, 5]
+FUSION_GROUPS = [pytest.param(None, marks=pytest.mark.bench), 1, 2, 5]
 
 # Timed dispatches per test; the reported latency is the fastest of them.
 TIMED_RUNS = 3
@@ -49,7 +50,6 @@ def _staged(operator, golden_ref):
 
 
 @pytest.mark.supported_devices("npu2")
-@pytest.mark.bench
 @pytest.mark.metrics(
     Latency=r"Latency \(us\): (?P<value>[\d\.]+)",
     Bandwidth=r"Effective Bandwidth: (?P<value>[\d\.e\+-]+) GB/s",
@@ -100,14 +100,15 @@ def test_swiglu_prefill_stream(k, aie_context):
 @pytest.mark.supported_devices("npu2")
 @pytest.mark.extensive
 def test_swiglu_prefill_stream_splits_the_hidden_row(aie_context):
-    """At a hidden dimension of 4096 the SiLU and multiply cores each take half a row, so a
-    call links an object built for the half it is handed, not for the whole row."""
+    """Deployed layer by layer at a hidden dimension of 4096, the SiLU and multiply cores each take
+    half a row, so a call links an object built for the half it is handed."""
     seq_len, embedding_dim, hidden_dim = 256, 1024, 4096
     golden_ref = generate_golden_reference(M=seq_len, K=embedding_dim, N=hidden_dim)
     operator = SwiGLUPrefillStream(
         seq_len=seq_len,
         embedding_dim=embedding_dim,
         hidden_dim=hidden_dim,
+        k=LAYER_BY_LAYER,
         context=aie_context,
     )
     operator.compile()

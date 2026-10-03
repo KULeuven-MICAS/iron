@@ -1,11 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (C) 2026 KU Leuven (MICAS). All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The one path from an operator's exported workload and emitted mapping to a generated design.
-
-An operator contributes its family name, its shape string and the knobs that distinguish its
-designs; the accelerator, solver, output root and design-cache key are chosen here.
-"""
+"""The one path from an operator's exported workload and mapping to a generated design.
+An operator gives its family name, shape string and design knobs; the accelerator, solver,
+output root and design-cache key are chosen here."""
 
 import json
 import os
@@ -48,7 +46,7 @@ def experiment_id(family: str, shape: str, suffix: str = "") -> str:
         )
     return (
         f"{hardware}-{family}{suffix}_{shape}"
-        f"-{grid.num_rows}_row_{grid.num_columns}_col"
+        f"-{grid.num_rows}_row_{grid.num_columns}_col-{BACKEND}"
         f"-{stream_revision()}{library_revision()}"
     )
 
@@ -58,12 +56,9 @@ def design_dir(experiment_id: str) -> str:
 
 
 def solve_options(npu: str, kernel_library=None):
-    """How every solve runs: links and the off-chip port do not cap the overlap, tile sizes
-    are searched around the mapping's seed, and port activity is reported.
-
-    Traced on this array, a core's idle time is lock stall rather than transfers queueing on a
-    shared route, and the off-chip traffic is priced by the hardware's off-chip bandwidth.
-    """
+    """How every solve runs: no link or off-chip contention (traced core idle time here is
+    lock stall, not route queueing), tile sizes searched around the mapping's seed, and port
+    activity reported."""
     from stream.api import SolveOptions
     from stream.opt.solver.solver import ConstraintSelection
 

@@ -2,11 +2,9 @@
 # SPDX-FileCopyrightText: Copyright (C) 2026 KU Leuven (MICAS). All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""IRON reads the compute grid from the mlir-aie device and leaves placement to stream.
-
-:class:`~iron.common.stream.hardware.ComputeArray` is the only place that knows what
-a stream core id means, and the emitted mapping declares no cores at all.
-"""
+"""IRON reads the compute grid from the mlir-aie device and leaves placement to stream:
+only :class:`~iron.common.stream.hardware.ComputeArray` knows what a stream core id means,
+and the emitted mapping declares no cores."""
 
 import pytest
 
@@ -66,10 +64,7 @@ def test_ids_agree_with_the_accelerator_stream_solves_against():
 
 
 def test_the_mapping_declares_no_placement(tmp_path):
-    """Placement is stream's: every emitted layer carries a kernel and nothing else.
-
-    What the derived cores are is stream's own business and its tests'; this only guards
-    the interface, that IRON declares none of them."""
+    """Placement is stream's: every emitted layer carries a kernel and no cores."""
     import yaml
 
     _, mapping_path = stream_design.build_inputs(*DIMS, tmp_path / "design")

@@ -3,14 +3,9 @@
 
 """Reference attention core: ``softmax(q @ k_t) @ v`` for every head at once.
 
-Running this module produces the golden output; exporting it produces the workload
-stream-dse generates the design from. Two things the caller does rather than the graph:
-``k_t`` arrives transposed and the ``1/sqrt(d_head)`` factor comes folded into ``q``.
-``README.md`` says why.
-
-The names below are the block's vocabulary. Everything downstream is named from here:
-the ONNX tensors, the mapping's layers and runtime arguments, and the runtime buffers.
-"""
+Running it gives the golden output; exporting it gives stream-dse's workload. The caller
+transposes ``k_t`` and folds ``1/sqrt(d_head)`` into ``q``. The names below name the ONNX
+tensors, the mapping's layers and runtime arguments, and the runtime buffers."""
 
 import math
 
@@ -34,18 +29,9 @@ RESULT_NAMES = {SCORES_NODE: SCORES, SOFTMAX_NODE: PROBABILITIES, CONTEXT_NODE: 
 
 
 class AttentionCore(nn.Module):
-    """Each head's scores, softmax and context, over a pre-scaled ``q``; the heads are
-    the leading axis of every operand.
-
-    ``causal`` masks every key at a later position than its query; the mask is additive,
-    so it survives the export as an ordinary operand.
-
-    ``flash`` writes the same computation as one online-softmax step per key block, whose
-    mask, running maximum and sum and final normalisation are all the kernel's own: the
-    graph then loses the reduction over the key, and with it the reason the key had to
-    stay resident. It is the shape the design is generated from, not the one the golden
-    output is taken from: run this and the probabilities come out unnormalised.
-    """
+    """Each head's scores, softmax and context over a pre-scaled ``q``, heads leading.
+    ``causal`` masks on the CPU only; the design's softmax kernel applies the mask itself.
+    ``flash`` exports one unnormalised online-softmax step per key block."""
 
     def __init__(self, causal: bool = False, flash: bool = False):
         super().__init__()

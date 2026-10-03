@@ -1,13 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (C) 2026 KU Leuven (MICAS). All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""One stream-dse design as an ``OperatorSequence`` child, shared by every generated
-operator.
-
-A concrete group supplies its design module, the dimensions that name one design and its
-runtime ports, and inherits how a design is loaded, keyed, compiled against the kernels it
-links, and given its argument spec.
-"""
+"""One stream-dse design as an ``OperatorSequence`` child. A concrete group supplies its
+design module, dimensions and runtime ports, and inherits loading, keying, kernel
+compilation and its argument spec."""
 
 from pathlib import Path
 
@@ -48,10 +44,8 @@ class StreamGroup(MLIROperator):
         )
 
     def get_kernel_artifacts(self):
-        """The objects this group's generated design links, built at the shapes it names.
-
-        The design is the authority: stream-dse chooses the tile, writes the object name
-        it compiled against, and IRON builds that rather than predicting it."""
+        """The objects this group's generated design links, built at the shapes it names;
+        stream-dse chooses the tile and names the object, and IRON builds that."""
         kernels_dir, kernel_dir = self.context.kernels_dir, get_kernel_dir()
         text = str(self._design.load_group(self.group_index, **self._dims()))
         produced: dict[str, object] = {}
@@ -80,11 +74,8 @@ class StreamGroup(MLIROperator):
         return self._design.group_digest(self.group_index, **self._dims())
 
     def get_arg_spec(self):
-        """The group's runtime arguments, shaped by the exported graph.
-
-        Both the names and their order come from the workload, which is also the
-        order the generated design takes its arguments in.
-        """
+        """The group's runtime arguments, named, shaped and ordered by the exported
+        workload, which is the order the generated design takes them in."""
         shapes, (inputs, outputs) = self._ports()
         return [AIERuntimeArgSpec("in", shapes[name]) for name in inputs] + [
             AIERuntimeArgSpec("out", shapes[name]) for name in outputs

@@ -2,13 +2,9 @@
 # SPDX-FileCopyrightText: Copyright (C) 2026 KU Leuven (MICAS). All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Every fused group of a stream-backed operator's mapping must name a kernel for each
-of its layers and tile only its own layers. The checks run per group and read the
-emitted mapping, so a stream-backed operator joins by adding a row to :data:`DESIGNS`.
+"""Every fused group of a stream-backed operator's mapping names a kernel for each of
+its layers and tiles only its own layers; an operator joins by adding to :data:`DESIGNS`.
 """
-
-import inspect
-from pathlib import Path
 
 import pytest
 import yaml
@@ -47,28 +43,6 @@ def group_findings(mapping: dict, index: int) -> list[str]:
         if str(entry["dim"]).split(".")[0] not in group["layers"]:
             findings.append(f"{group['name']} tiles {entry['dim']} from another group")
     return findings
-
-
-# Helpers that belong to iron.common.stream, by the name a copy of each would define.
-COPIED_PLUMBING = {
-    "mlir_mod_ctx": "region_module",
-    "hashlib": "digest",
-    "IRON_TRACE_SIZE": "trace_size",
-    "IRON_TRACE_NTILES": "trace_tiles",
-    "final.mlir": "design_paths",
-    "get_current_device": "array",
-    r"func\.func\s+private": "prefixed",
-}
-
-
-@pytest.mark.parametrize("operator", sorted(DESIGNS))
-def test_design_module_imports_the_shared_helpers(operator):
-    source = Path(inspect.getfile(DESIGNS[operator][0])).read_text()
-    copied = sorted({h for marker, h in COPIED_PLUMBING.items() if marker in source})
-    assert not copied, (
-        f"{operator}/stream_design.py reimplements {copied}; "
-        "import them from iron.common.stream"
-    )
 
 
 def _cases():

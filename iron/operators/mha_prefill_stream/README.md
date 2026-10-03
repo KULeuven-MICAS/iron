@@ -88,16 +88,8 @@ share, which costs no DMA channel and lets the two cores run a key block apart.
   `mha.cc` reuses the score GEMM's compiled block for the value matmul, and past 8192
   the query transfer needs one more iteration than a shim buffer descriptor holds.
 
-## Numbers
+## Measuring
 
-Steady-state latency with 32 heads and `d_head = 64` on NPU2, in microseconds, against
-the faster of `iron/operators/mha` at 8 pipelines and, below 512, at one pipeline per 64
-positions. Both use the same `mha.cc` kernels. At the `rel_tol=4e-2, abs_tol=1.5e-1`
-tolerance the tests check, the generated design has no element outside it at any length
-and the hand-written one has 47 to 650.
-
-| `seq_len` | 64 | 128 | 256 | 512 | 1024 | 2048 | 4096 | 8192 |
-|---|---|---|---|---|---|---|---|---|
-| `iron/operators/mha` | 479 | 568 | 710 | 937 | 2513 | 7925 | 26437 | 93434 |
-| `flash=True` | 102 | 174 | 188 | 472 | 1447 | 5324 | 19695 | 75724 |
-| speedup | 4.68x | 3.26x | 3.79x | 1.99x | 1.74x | 1.49x | 1.34x | 1.23x |
+`python -m iron.common.stream.model_check sweep OUT --operators mha` times the design
+stream chooses and every candidate on the NPU; `report OUT` compares them with stream's
+estimates.
