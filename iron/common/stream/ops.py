@@ -17,7 +17,7 @@ from onnx import defs
 from onnxscript import opset18
 from onnxscript.values import Op, Opset
 
-from iron.common.stream.kernel_library import fixed_dims, library
+from iron.common.stream.kernel_library import fixed_dims, load_library
 
 CUSTOM_DOMAIN = Opset("com.example", 1)
 
@@ -105,7 +105,6 @@ def _gemm_artifacts(name, kernels_dir, kernel_dir, m: int, k: int, n: int):
                 # zero.cc's entry point, over the m x n output tile.
                 "-DZERO_TYPE=bfloat16",
                 f"-DTILE_SIZE={m * n}",
-                # The driver adds the intrinsics header after any -include; zero.cc needs it first.
                 f"-include{_INTRINSICS[kernel_dir]}",
                 f"-include{zero_source}",
             ],
@@ -172,7 +171,7 @@ def artifacts_for_object(name: str, kernels_dir, kernel_dir) -> list:
     """The compilation artifacts building one linked object, found by the kernel library's object names."""
     from iron.common.compilation import KernelObjectArtifact, SourceArtifact
 
-    for spec in library(kernel_dir).kernels.values():
+    for spec in load_library(kernel_dir).kernels.values():
         if spec.object is None or (shape := _object_shape(spec.object, name)) is None:
             continue
         if build := _BUILDERS.get(Path(spec.source).name):
@@ -233,8 +232,6 @@ class StreamOp:
     translation: Callable | None = None
 
 
-# torch operator -> its ONNX form and AIE kernel. A matmul keeps the exporter's MatMul,
-# whose leading axes are batch axes, such as attention's heads.
 TORCH_OPS: dict[Callable, StreamOp] = {
     torch.ops.aten.matmul.default: StreamOp("MatMul", "gemm"),
     torch.ops.aten.silu.default: StreamOp("Silu", "silu", _to_silu),

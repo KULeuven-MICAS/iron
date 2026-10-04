@@ -27,8 +27,6 @@ from iron.common.test_utils import verify_buffer
 # The MILP-feasible shape on the whole-array Strix (npu2) target.
 SEQ_LEN, EMBEDDING_DIM, HIDDEN_DIM = 256, 512, 2048
 
-# Fused groups to deploy the block as: the partition stream prices cheapest, one
-# design, a front end plus the down projection, or one design per layer.
 FUSION_GROUPS = [pytest.param(None, marks=pytest.mark.bench), 1, 2, 5]
 
 # Timed dispatches per test; the reported latency is the fastest of them.

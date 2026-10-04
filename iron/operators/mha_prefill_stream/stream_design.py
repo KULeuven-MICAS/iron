@@ -11,13 +11,17 @@ from pathlib import Path
 import torch
 
 from iron.common.stream.design import (
+    design_digest,
     design_paths,
-    digest,
     group_text,
     region_module,
 )
 from iron.common.stream.hardware import array
-from iron.common.stream.kernel_library import flash_blocks, with_block
+from iron.common.stream.kernel_library import (
+    fixed_dims,
+    load_library,
+    pinned_to_block,
+)
 from iron.common.stream.mapping import (
     FusedGroup,
     emit_mapping,
@@ -36,20 +40,33 @@ from iron.operators.mha_prefill_stream.reference import (
 
 LAYER_BY_LAYER = 3
 
-# Key positions a score GEMM in a group of its own produces at a time.
 _KEY_BLOCK = 64
 
-# The key and head block of mha.cc's flash kernels.
-FLASH_BLOCK = 64
+FLASH_BLOCK = fixed_dims("matmul_PV", "aie2p")["k"]
 
-# The longest flash sequence stream-dse's stride legalization finishes for.
 FLASH_MAX_SEQ = 8192
 
-# Query positions a fused GEMM works at a time, beside the head's resident key or value.
 FUSED_QUERY_TILE = 16
 
 CORE_BYTES = 64 * 1024
-BYTES_PER_ELEMENT = 2  # bfloat16
+BYTES_PER_ELEMENT = 2
+
+
+SWEEP_POINTS = [
+    dict(seq_len=s, d_head=FLASH_BLOCK, heads=32, flash=True)
+    for s in (64, 128, 256, 512, 1024, 2048, 4096, 8192)
+]
+
+
+def flash_blocks(kernel_dir: str | None = None) -> tuple[int, ...]:
+    """Query blocks the online-softmax source compiles for, finest first."""
+    blocks = load_library(kernel_dir).spec("partial_softmax").dim("m").blocks
+    return tuple(sorted(blocks))
+
+
+def sweep_candidates() -> list[dict]:
+    """The designs stream chooses between at a sweep point, as constructor kwargs."""
+    return [dict(query_block=block) for block in flash_blocks()]
 
 
 def flash_query_seed(query_block=None) -> int:
@@ -235,26 +252,26 @@ def _experiment_id(*, k, seq_len, d_head, heads, causal, flash, query_block=None
     return experiment_id("mha", f"{heads}_{seq_len}_{d_head}", suffix)
 
 
-def design_root(*, npu, **dims):
+def design_root(**dims):
     """The directory stream writes this design and its estimate to."""
     return design_dir(_experiment_id(**dims))
 
 
 def _run_codegen(npu, query_block=None, **dims):
     """Run stream-dse's constraint optimization and code generation once."""
-    eid = _experiment_id(query_block=query_block, **dims)
+    experiment = _experiment_id(query_block=query_block, **dims)
     workload_path, mapping_path = build_inputs(
-        output_dir=design_dir(eid), query_block=query_block, **dims
+        output_dir=design_dir(experiment), query_block=query_block, **dims
     )
-    library = None if query_block is None else with_block(query_block)
-    run_codegen(eid, workload_path, mapping_path, npu, library)
+    library = None if query_block is None else pinned_to_block(query_block)
+    run_codegen(experiment, workload_path, mapping_path, npu, library)
 
 
-def _group_text(group_index, **dims) -> str:
+def _group_text(group_index, npu, **dims) -> str:
     return group_text(
         group_index,
         design_paths(design_root(**dims), len(group_layers(dims["k"]))),
-        lambda: _run_codegen(**dims),
+        lambda: _run_codegen(npu, **dims),
     )
 
 
@@ -266,7 +283,7 @@ def group_ports(seq_len, d_head, heads=1, k=LAYER_BY_LAYER):
 
 def group_digest(group_index, **dims) -> str:
     """Digest of a group's design, for recognising groups that share one."""
-    return digest(_group_text(group_index, **dims))
+    return design_digest(_group_text(group_index, **dims))
 
 
 def load_group(group_index, func_prefix="", **dims):

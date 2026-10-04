@@ -1,11 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (C) 2026 KU Leuven (MICAS). All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Reference attention core: ``softmax(q @ k_t) @ v`` for every head at once.
-
-Running it gives the golden output; exporting it gives stream-dse's workload. The caller
-transposes ``k_t`` and folds ``1/sqrt(d_head)`` into ``q``. The names below name the ONNX
-tensors, the mapping's layers and runtime arguments, and the runtime buffers."""
+"""Reference attention core ``softmax(q @ k_t) @ v`` per head, over a pre-transposed ``k_t``
+and a pre-scaled ``q``: run, the golden output; exported, stream-dse's workload. Its names
+name the ONNX tensors, the mapping's layers and the runtime arguments and buffers."""
 
 import math
 
@@ -21,7 +19,6 @@ CONTEXT = "context"
 
 TENSOR_NAMES = (QUERY, KEY_TRANSPOSED, VALUE, SCORES, PROBABILITIES, CONTEXT)
 
-# Node names in the exported graph, in topological order.
 SCORES_NODE, SOFTMAX_NODE, CONTEXT_NODE = "Attn_Scores", "Attn_Softmax", "Attn_Context"
 NODE_NAMES = [SCORES_NODE, SOFTMAX_NODE, CONTEXT_NODE]
 
@@ -40,7 +37,7 @@ class AttentionCore(nn.Module):
 
     def forward(self, q, k_t, v):
         if self.flash:
-            import iron.common.stream.ops  # noqa: F401  (registers the operator)
+            import iron.common.stream.ops  # noqa: F401
 
             return torch.ops.iron_stream.partial_softmax(q @ k_t) @ v
         scores = q @ k_t

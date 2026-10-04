@@ -15,6 +15,7 @@ The ``OperatorSequence`` dispatch modes covered here are:
                    NPU1 (Phoenix).
 * ``"fused"``    – single-ELF dispatch (``aiex.configure`` / ``aiex.run``),
                    NPU2 only.
+* ``"single_xclbin"`` – one step dispatched as its own xclbin, NPU2 only.
 * ``"separate"`` – one xclbin per operator, chained (works on all platforms).
 * ``"compare"``  – ``"separate"`` NPU path plus a per-step CPU-reference check.
 * ``"reference"``– pure-CPU evaluation via each operator's ``reference()``.
@@ -26,13 +27,14 @@ import pytest
 import torch
 
 import aie.utils as aie_utils
-from aie.iron.device import NPU2
+from aie.iron.device import NPU1, NPU2
 from aie.utils.verify import Tolerance
 
 from iron.common.sequence import (
     CompareDispatch,
     OperatorSequence,
     SequenceSingleXclbinCallable,
+    SingleXclbinDispatch,
 )
 from iron.common.compilation.sequence import fuse_mlir
 from iron.common.test_utils import verify_buffer
@@ -368,27 +370,46 @@ def test_non_input_buffers_sync_without_explicit_flush(dispatch, aie_context):
         assert not errors, f"rep {rep}: out has {len(errors)} mismatches"
 
 
-# ---------------------------------------------------------------------------
-# 6. A runlist of one step needs no reconfiguration, so it dispatches one xclbin.
-# ---------------------------------------------------------------------------
+def _single_step_sequence(op, name, context):
+    """out = op(a), as a 1-step OperatorSequence."""
+    return OperatorSequence(
+        name=name,
+        runlist=[(op, "a", "out")],
+        input_args=["a"],
+        output_args=["out"],
+        dispatch="single_xclbin",
+        context=context,
+    )
+
+
+def _relu(context):
+    return ReLU(
+        size=_ADD_RELU_SIZE,
+        num_aie_columns=_ADD_RELU_COLS,
+        num_channels=1,
+        tile_size=_ADD_RELU_TILE,
+        context=context,
+    )
+
+
+def test_single_xclbin_dispatch_takes_one_step(aie_context):
+    seq = _build_add_relu_sequence(
+        aie_context, "single_xclbin", "infra_single_two_steps"
+    )
+    with pytest.raises(ValueError, match="one untraced step"):
+        SingleXclbinDispatch().set_up_artifacts(seq)
+
+
+def test_single_xclbin_dispatch_requires_npu2():
+    with pytest.raises(RuntimeError, match="requires NPU2"):
+        SingleXclbinDispatch().resolve(NPU1())
 
 
 def test_a_single_step_runlist_dispatches_its_own_xclbin(aie_context):
     if not isinstance(aie_utils.get_current_device(), NPU2):
         pytest.skip("the single-step xclbin path is NPU2's alternative to the full ELF")
-    relu = ReLU(
-        size=_ADD_RELU_SIZE,
-        num_aie_columns=_ADD_RELU_COLS,
-        num_channels=1,
-        tile_size=_ADD_RELU_TILE,
-        context=aie_context,
-    )
-    seq = OperatorSequence(
-        name="infra_single_step_relu",
-        runlist=[(relu, "a", "out")],
-        input_args=["a"],
-        output_args=["out"],
-        context=aie_context,
+    seq = _single_step_sequence(
+        _relu(aie_context), "infra_single_step_relu", aie_context
     )
     seq.compile()
     run = seq.get_callable()

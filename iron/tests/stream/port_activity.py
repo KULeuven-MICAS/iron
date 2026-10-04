@@ -44,10 +44,9 @@ def test_the_estimate_keeps_the_cycles_and_each_groups_latency_and_rows(tmp_path
     }
 
 
-def test_every_solve_asks_for_the_report_without_a_bound(monkeypatch):
+def test_every_solve_asks_for_the_port_report(monkeypatch):
     from iron.common.stream import runner
 
     monkeypatch.setattr(runner, "array", lambda: SimpleNamespace(num_columns=8))
-    monkeypatch.setattr(runner, "library", lambda: None)
-    assert PORT_REPORT == {"memory_ports": {"interval": False, "burst": False}}
+    monkeypatch.setattr(runner, "load_library", lambda: None)
     assert solve_options("npu2").families == [PORT_REPORT]

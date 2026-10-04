@@ -21,7 +21,7 @@ class StreamGroup(MLIROperator):
     group_index: int
 
     @property
-    def _design(self):
+    def _design_module(self):
         raise NotImplementedError
 
     def _dims(self) -> dict:
@@ -47,12 +47,10 @@ class StreamGroup(MLIROperator):
         """The objects this group's generated design links, built at the shapes it names;
         stream-dse chooses the tile and names the object, and IRON builds that."""
         kernels_dir, kernel_dir = self.context.kernels_dir, get_kernel_dir()
-        text = str(self._design.load_group(self.group_index, **self._dims()))
+        text = str(self._design_module.load_group(self.group_index, **self._dims()))
         produced: dict[str, object] = {}
         deferred: list[str] = []
         for name in linked_objects(text):
-            # An object one builder makes beside another, like mha.cc's passThrough copy,
-            # has no library entry of its own.
             try:
                 artifacts = artifacts_for_object(name, kernels_dir, kernel_dir)
             except ValueError:
@@ -67,11 +65,13 @@ class StreamGroup(MLIROperator):
 
     def design_root(self) -> Path:
         """The directory stream wrote this group's design to, with its ``estimate.json``."""
-        return Path(self._design.design_root(**self._dims()))
+        dims = self._dims()
+        del dims["npu"]
+        return Path(self._design_module.design_root(**dims))
 
     def design_key(self):
         """Groups whose generated design is byte-identical share it."""
-        return self._design.group_digest(self.group_index, **self._dims())
+        return self._design_module.group_digest(self.group_index, **self._dims())
 
     def get_arg_spec(self):
         """The group's runtime arguments, named, shaped and ordered by the exported

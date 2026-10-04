@@ -1,11 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (C) 2026 KU Leuven (MICAS). All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Generate the SwiGLU-prefill design with stream-dse.
-
-The workload is exported from :mod:`~iron.operators.swiglu_prefill_stream.reference` and
-the mapping from each layer's kernel arguments, both into the experiment's output
-directory; the mapping's node names come from the workload. Imported lazily at build."""
+"""Generate the SwiGLU-prefill design with stream-dse, from the workload exported from
+:mod:`~iron.operators.swiglu_prefill_stream.reference` and each layer's kernel arguments,
+into the experiment's output directory. Imported lazily at build."""
 
 import json
 import logging
@@ -15,8 +13,8 @@ from pathlib import Path
 import torch
 
 from iron.common.stream.design import (
+    design_digest,
     design_paths,
-    digest,
     group_text,
     region_module,
 )
@@ -49,10 +47,8 @@ RESULT_NAMES = {
     MUL: reference.HIDDEN,
 }
 
-# GEMM blocks as (sequence, embedding, hidden), tried largest first until stream's solve fits one.
 GEMM_BLOCKS = ((64, 64, 64), (32, 32, 64))
 
-# The widest row an elementwise layer holds three operands of; it must divide the dimension.
 ELEMENTWISE_WIDTH = 2048
 
 logger = logging.getLogger(__name__)
@@ -66,6 +62,21 @@ GROUP_LAYERS = {
     2: [[GATE, UP, SILU, MUL], [DOWN]],
     LAYER_BY_LAYER: [[GATE], [UP], [SILU], [MUL], [DOWN]],
 }
+
+SWEEP_POINTS = [
+    dict(seq_len=s, embedding_dim=e, hidden_dim=h)
+    for e, h in ((1024, 4096), (2048, 8192))
+    for s in (256, 512, 1024, 2048, 4096)
+]
+
+
+def sweep_candidates() -> list[dict]:
+    """The designs stream chooses between at a sweep point, as constructor kwargs."""
+    return [
+        dict(k=k, gemm_block=block)
+        for k in (1, LAYER_BY_LAYER)
+        for block in GEMM_BLOCKS
+    ]
 
 
 def gemm_blocks(block):
@@ -92,11 +103,15 @@ def partition_layers(seq_len, embedding_dim, hidden_dim, npu, k, gemm_block=None
     """
     if k is not None:
         return GROUP_LAYERS[k]
-    eid = _experiment_id(seq_len, embedding_dim, hidden_dim, k, gemm_block)
-    marker = Path(design_dir(eid)) / "partition.json"
+    experiment = _experiment_id(seq_len, embedding_dim, hidden_dim, k, gemm_block)
+    marker = Path(design_dir(experiment)) / "partition.json"
     if not marker.exists():
         _run_codegen(seq_len, embedding_dim, hidden_dim, npu, k, gemm_block)
     return [list(group) for group in json.loads(marker.read_text())["groups"]]
+
+
+def _elementwise_kwargs(rows, columns, layout):
+    return {"layout": layout, "m": rows, "n": columns}
 
 
 def _kernel_kwargs(k, hidden_dim, block):
@@ -109,11 +124,11 @@ def _kernel_kwargs(k, hidden_dim, block):
         return dict(zip("mkn", block), layout="default")
 
     if k == LAYER_BY_LAYER:
-        wide = elementwise(1, _row_width(hidden_dim), "contiguous")
+        wide = _elementwise_kwargs(1, _row_width(hidden_dim), "contiguous")
         elementwise_kwargs = {SILU: wide, MUL: wide}
     else:
         sequence_tile, _, hidden_tile = block
-        fused = elementwise(sequence_tile, hidden_tile, "default")
+        fused = _elementwise_kwargs(sequence_tile, hidden_tile, "default")
         elementwise_kwargs = {SILU: fused, MUL: fused}
     return {
         GATE: gemm(tiles[GATE]),
@@ -122,10 +137,6 @@ def _kernel_kwargs(k, hidden_dim, block):
         MUL: elementwise_kwargs[MUL],
         DOWN: gemm(tiles[DOWN]),
     }
-
-
-def elementwise(rows, columns, layout):
-    return {"layout": layout, "m": rows, "n": columns}
 
 
 def _groups(k):
@@ -215,10 +226,10 @@ def _run_codegen(seq_len, embedding_dim, hidden_dim, npu, k, gemm_block=None):
     """Build with the largest block the solve accepts; the last candidate must hold.
     With ``k=None`` every allowed (partition, block) pair is a candidate stream picks from.
     """
-    eid = _experiment_id(seq_len, embedding_dim, hidden_dim, k, gemm_block)
+    experiment = _experiment_id(seq_len, embedding_dim, hidden_dim, k, gemm_block)
     blocks = _blocks(gemm_block)
     if k is None:
-        base = Path(design_dir(eid))
+        base = Path(design_dir(experiment))
         candidates, errors = [], []
         for candidate_k in (1, LAYER_BY_LAYER):
             for block in blocks:
@@ -242,7 +253,7 @@ def _run_codegen(seq_len, embedding_dim, hidden_dim, npu, k, gemm_block=None):
             raise errors[-1]
         import yaml
 
-        chosen = run_partition_codegen(eid, workload_path, candidates, npu)
+        chosen = run_partition_codegen(experiment, workload_path, candidates, npu)
         groups = yaml.safe_load(Path(candidates[chosen]).read_text())["fused_groups"]
         (base / "partition.json").write_text(
             json.dumps({"groups": [group["layers"] for group in groups]})
@@ -250,11 +261,11 @@ def _run_codegen(seq_len, embedding_dim, hidden_dim, npu, k, gemm_block=None):
         return
     for block in blocks:
         workload_path, mapping_path = build_inputs(
-            seq_len, embedding_dim, hidden_dim, design_dir(eid), k=k, block=block
+            seq_len, embedding_dim, hidden_dim, design_dir(experiment), k=k, block=block
         )
         try:
-            run_codegen(eid, workload_path, mapping_path, npu)
-        except RuntimeError as error:
+            run_codegen(experiment, workload_path, mapping_path, npu)
+        except (RuntimeError, ValueError) as error:
             if block == blocks[-1]:
                 raise
             logger.info("Block %s does not fit (%s); trying the next", block, error)
@@ -262,7 +273,7 @@ def _run_codegen(seq_len, embedding_dim, hidden_dim, npu, k, gemm_block=None):
         return
 
 
-def design_root(*, k, seq_len, embedding_dim, hidden_dim, npu, gemm_block=None):
+def design_root(*, k, seq_len, embedding_dim, hidden_dim, gemm_block=None):
     """The directory stream writes this design and its estimate to."""
     return design_dir(_experiment_id(seq_len, embedding_dim, hidden_dim, k, gemm_block))
 
@@ -286,7 +297,7 @@ def _group_text(
 
 def group_digest(group_index, **dims) -> str:
     """Digest of a group's design, for recognising groups that share one."""
-    return digest(_group_text(group_index, **dims))
+    return design_digest(_group_text(group_index, **dims))
 
 
 def load_group(group_index, func_prefix="", **dims):

@@ -1,15 +1,15 @@
 # SPDX-FileCopyrightText: Copyright (C) 2026 KU Leuven (MICAS). All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Check stream-dse's estimates of the generated operators against the NPU.
-
-``sweep OUT [--operators mha swiglu] [--trace]`` times stream's choice and every candidate
-per point into ``OUT/records.jsonl``; ``report OUT`` compares the choice, latency estimates
-and (traced) memory tile traffic with the measurements."""
+"""Check stream-dse's estimates of the generated operators against the NPU. ``sweep OUT``
+times stream's choice and every candidate per point into ``OUT/records.jsonl``; ``report OUT``
+compares the choice, latency estimates and traced memory tile traffic with the measurements.
+"""
 
 import argparse
 import fcntl
 import hashlib
+import importlib
 import json
 import math
 import os
@@ -17,71 +17,48 @@ import re
 from contextlib import contextmanager
 from pathlib import Path
 
-# The NPU2 array clock the cycles stream counts run at.
 AIE_CLOCK_HZ = 1.8e9
-# Back-to-back dispatches before and during a measurement: the platform clocks down within
-# a millisecond of the NPU going idle, so each measurement runs this long without a gap.
 WARM_S, TIMED_S, MIN_ITERS = 0.2, 0.5, 8
-# Traced runs: one port selection per direction, each watching every channel of a memory
-# tile in that direction.
 MEMTILE_CHANNELS = 6
 TRACE_SIZE = 8 << 20
 TRACE_PORTS = tuple(
     ",".join(f"{direction}:{channel}" for channel in range(MEMTILE_CHANNELS))
     for direction in ("S2MM", "MM2S")
 )
-# Traced builds take fewer heads, so the trace of a long sequence fits its buffer; each trace
-# is compared with stream's estimate of the design it traced.
 TRACE_HEADS = 2
-# What a memory-tile DMA channel moves a traced cycle it runs, measured on an element-wise
-# design whose bytes through each memory tile are known.
 DMA_BITS_PER_CYCLE = 64
-# The memory tile traced: the first column's, which every design of the array uses.
 TRACE_TILES = ((0, 1),)
 RECORDS = "records.jsonl"
-# The smallest one-design operator over every column, as the generated designs are, whose
-# latency is what every dispatch costs on top of the cycles stream counts.
-DISPATCH = dict(operator="dispatch", point={}, candidate={}, ports=None)
+DISPATCH_FLOOR = dict(operator="dispatch", point={}, candidate={}, ports=None)
+OPERATORS = {
+    "mha": ("mha_prefill_stream", "MHAPrefillStream"),
+    "swiglu": ("swiglu_prefill_stream", "SwiGLUPrefillStream"),
+}
+
+
+def _operator_module(operator, module):
+    if operator not in OPERATORS:
+        raise ValueError(f"no sweep for {operator!r}, only for {sorted(OPERATORS)}")
+    return importlib.import_module(f"iron.operators.{OPERATORS[operator][0]}.{module}")
 
 
 def points(operator):
     """The sweep of one operator, as constructor keyword arguments."""
-    if operator == "mha":
-        return [
-            dict(seq_len=s, d_head=64, heads=32, flash=True)
-            for s in (64, 128, 256, 512, 1024, 2048, 4096, 8192)
-        ]
-    return [
-        dict(seq_len=s, embedding_dim=e, hidden_dim=h)
-        for e, h in ((1024, 4096), (2048, 8192))
-        for s in (256, 512, 1024, 2048, 4096)
-    ]
+    return _operator_module(operator, "stream_design").SWEEP_POINTS
 
 
 def candidates(operator):
     """Stream's own choice first, then every design it chooses between."""
-    if operator == "mha":
-        from iron.common.stream.kernel_library import flash_blocks
-
-        return [{}] + [dict(query_block=b) for b in flash_blocks()]
-    from iron.operators.swiglu_prefill_stream.stream_design import (
-        GEMM_BLOCKS,
-        LAYER_BY_LAYER,
-    )
-
-    return [{}] + [
-        dict(k=k, gemm_block=block)
-        for k in (1, LAYER_BY_LAYER)
-        for block in GEMM_BLOCKS
-    ]
+    return [{}] + _operator_module(operator, "stream_design").sweep_candidates()
 
 
 def build(operator, point, candidate, build_dir):
     from iron.common import AIEContext
 
     context = AIEContext(build_dir=str(build_dir))
-    if operator == DISPATCH["operator"]:
+    if operator == DISPATCH_FLOOR["operator"]:
         from iron.common.sequence import OperatorSequence
+        from iron.common.stream.design import sequence_dispatch
         from iron.common.stream.hardware import array
         from iron.operators.relu.op import ReLU
 
@@ -93,21 +70,16 @@ def build(operator, point, candidate, build_dir):
             tile_size=1024,
             context=context,
         )
-        # Dispatched as the generated operators are: a sequence of one design.
         return OperatorSequence(
             name="dispatch_floor",
             runlist=[(relu, "x", "y")],
             input_args=["x"],
             output_args=["y"],
+            dispatch=sequence_dispatch(1),
             context=context,
         )
-    if operator == "mha":
-        from iron.operators.mha_prefill_stream.op import MHAPrefillStream
-
-        return MHAPrefillStream(**point, **candidate, context=context)
-    from iron.operators.swiglu_prefill_stream.op import SwiGLUPrefillStream
-
-    return SwiGLUPrefillStream(**point, **candidate, context=context)
+    operator_class = getattr(_operator_module(operator, "op"), OPERATORS[operator][1])
+    return operator_class(**point, **candidate, context=context)
 
 
 @contextmanager
@@ -169,7 +141,6 @@ def trace(op, out):
     for path in dump_traces(run, op.name, out_dir=out / "traces", summary=False):
         events = json.loads(Path(path).read_text())
         events = events["traceEvents"] if isinstance(events, dict) else events
-        # A design's trace is named after the runlist step that first runs it.
         first = int(re.search(rf"{re.escape(op.name)}_(\d+)_", Path(path).name)[1])
         tiles = {
             label: _running(e for e in events if e.get("pid") == pid)
@@ -204,11 +175,10 @@ def _key(record):
 
 
 def _jobs(operators, traced):
-    yield dict(DISPATCH)
+    yield dict(DISPATCH_FLOOR)
     for operator in operators:
         for point in points(operator):
             for candidate in candidates(operator):
-                # A design is traced as stream builds it, which is what it priced the ports of.
                 tracing = TRACE_PORTS if traced and not candidate else ()
                 for ports in (None, *tracing):
                     yield dict(
@@ -218,7 +188,7 @@ def _jobs(operators, traced):
 
 def _run(job, out):
     build_dir = out / "build" / re.sub(r"\W+", "_", _key(job))
-    if job["operator"] == DISPATCH["operator"]:
+    if job["operator"] == DISPATCH_FLOOR["operator"]:
         op = build(job["operator"], {}, {}, build_dir)
         op.compile()
         return {"measured_us": measure(op.get_callable())}
@@ -246,7 +216,6 @@ def sweep(out, operators, traced):
     runner.OUTPUT_ROOT = str(out / "designs")
     done = {_key(r) for r in load(out)}
     with open(out / RECORDS, "a") as records:
-        # A second sweep into the same directory would share its builds and the NPU.
         fcntl.flock(records, fcntl.LOCK_EX | fcntl.LOCK_NB)
         for job in _jobs(operators, traced):
             if _key(job) in done:
@@ -320,7 +289,6 @@ def _port_rows(traced):
     for record in traced:
         slots = record["ports"].split(",")
         for design in record["traced"]:
-            # Every run of the design is an entry of the runlist.
             group, runs = design["groups"][0], len(design["groups"])
             view = record["estimate"]["groups"][f"group_{group}"]
             latency = view["latency"]
@@ -328,18 +296,25 @@ def _port_rows(traced):
             steady = (
                 latency["total"] - latency.get("fill", 0) - latency["per_iteration"]
             )
-            iterations = 1 + steady / interval
+            iterations = 1 + steady / interval if interval else 1
             for label, activity in design["tiles"].items():
+                if not activity["span"]:
+                    continue
                 row, col = map(int, re.search(r"tile(\d+),(\d+)", label).groups())
                 core = core_at[(col, row)]
                 for direction in sorted({slot.split(":")[0] for slot in slots}):
                     modelled = next(
-                        r
-                        for r in view["port_activity"]
-                        if r["kind"] == "memory_port"
-                        and r["core_ids"] == [core]
-                        and r["resource"] == f"dma.{direction.lower()}"
+                        (
+                            r
+                            for r in view["port_activity"]
+                            if r["kind"] == "memory_port"
+                            and r["core_ids"] == [core]
+                            and r["resource"] == f"dma.{direction.lower()}"
+                        ),
+                        None,
                     )
+                    if modelled is None:
+                        continue
                     cycles = sum(
                         activity["busy"].get(f"PORT_RUNNING_{i}", 0)
                         for i, slot in enumerate(slots)
@@ -426,14 +401,14 @@ def report(out):
         (
             r["measured_us"]["min"]
             for r in good
-            if r["operator"] == DISPATCH["operator"]
+            if r["operator"] == DISPATCH_FLOOR["operator"]
         ),
         0.0,
     )
     timed = [
         r | {"predicted_us": predicted_us(r, dispatch_us)}
         for r in good
-        if r["ports"] is None and r["operator"] != DISPATCH["operator"]
+        if r["ports"] is None and r["operator"] != DISPATCH_FLOOR["operator"]
     ]
     ports = list(_port_rows([r for r in good if r["ports"] is not None]))
     lines = ["# stream estimate against the NPU", "", "## Latency", ""]
@@ -493,8 +468,6 @@ def report(out):
             "| shape | seq | candidate | group | stream (cycles) | traced (cycles) | residual |",
             "|---|---|---|---|---|---|---|",
         ]
-        # A traced build dispatches each run on its own, so only a design that runs once
-        # spans what the timed build does.
         groups = {
             (p["shape"], p["seq"], p["candidate"], p["group"]): p
             for p in ports
@@ -524,7 +497,7 @@ def main():
     run = commands.add_parser("sweep")
     run.add_argument("out", type=Path)
     run.add_argument(
-        "--operators", nargs="+", default=["mha", "swiglu"], choices=["mha", "swiglu"]
+        "--operators", nargs="+", default=sorted(OPERATORS), choices=sorted(OPERATORS)
     )
     run.add_argument("--trace", action="store_true")
     commands.add_parser("report").add_argument("out", type=Path)

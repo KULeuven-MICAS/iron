@@ -31,7 +31,7 @@ class _MHAStreamGroup(StreamGroup):
         StreamGroup.__init__(self, context=self.context)
 
     @property
-    def _design(self):
+    def _design_module(self):
         from iron.operators.mha_prefill_stream import stream_design
 
         return stream_design
@@ -53,7 +53,7 @@ class _MHAStreamGroup(StreamGroup):
         next input (in :func:`group_ports` order) as its second operand."""
         from iron.operators.mha_prefill_stream.reference import causal_mask
 
-        design = self._design
+        design = self._design_module
         value, operands = inputs[0], iter(inputs[1:])
         for layer in design.group_layers(self.k)[self.group_index]:
             if layer == design.SOFTMAX_NODE:
@@ -68,8 +68,8 @@ class _MHAStreamGroup(StreamGroup):
     def _ports(self):
         dims = (self.seq_len, self.d_head, self.heads)
         return (
-            self._design.workload_for(*dims).shapes,
-            self._design.group_ports(*dims, self.k)[self.group_index],
+            self._design_module.workload_for(*dims).shapes,
+            self._design_module.group_ports(*dims, self.k)[self.group_index],
         )
 
 
@@ -88,10 +88,10 @@ class MHAPrefillStream(OperatorSequence):
         flash=False,
         context=None,
         share_designs=True,
-        dispatch="auto",
+        dispatch=None,
         query_block=None,
     ):
-        from iron.common.stream.design import trace_size
+        from iron.common.stream.design import sequence_dispatch, trace_size
         from iron.operators.mha_prefill_stream.stream_design import (
             LAYER_BY_LAYER,
             group_ports,
@@ -134,6 +134,6 @@ class MHAPrefillStream(OperatorSequence):
             output_args=["output"],
             trace_size=trace_size(),
             share_designs=share_designs,
-            dispatch=dispatch,
+            dispatch=dispatch or sequence_dispatch(len(runlist)),
             context=context,
         )

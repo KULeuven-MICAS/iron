@@ -12,11 +12,11 @@ from iron.common.stream.model_check import (
     DMA_BITS_PER_CYCLE,
     TRACE_PORTS,
     _port_rows,
+    points,
     predicted_us,
 )
 
 LATENCY = {"total": 1000, "per_iteration": 400, "overlap_between_iterations": 300}
-# The first column's memory tile, as the accelerator description numbers it.
 MEMTILE = 1
 
 
@@ -67,3 +67,32 @@ def test_a_design_two_groups_share_is_traced_over_both_runs():
     assert port["group"] == "0+1"
     assert port["modelled_bits"] == pytest.approx(640 * iterations)
     assert port["traced_bits"] == pytest.approx(40 * DMA_BITS_PER_CYCLE / 2)
+
+
+def test_a_tile_stream_reports_no_port_for_is_left_out():
+    record = {
+        "operator": "swiglu",
+        "point": {"seq_len": 256},
+        "candidate": {},
+        "ports": TRACE_PORTS[0],
+        "estimate": _estimate(
+            latency=LATENCY | {"overlap_between_iterations": 400}, port_activity=[]
+        ),
+        "traced": [
+            {
+                "groups": [0],
+                "tiles": {
+                    "memtile_trace for tile1,0": {
+                        "busy": {"PORT_RUNNING_0": 30},
+                        "span": 4000,
+                    }
+                },
+            }
+        ],
+    }
+    assert list(_port_rows([record])) == []
+
+
+def test_an_operator_without_a_sweep_is_refused():
+    with pytest.raises(ValueError, match="no sweep"):
+        points("gemm")

@@ -17,8 +17,7 @@ from iron.common.stream.design import (
     traced_tiles,
 )
 from iron.common.stream.hardware import array
-from iron.common.stream.kernel_library import library
-from iron.common.stream.kernel_library import revision as library_revision
+from iron.common.stream.kernel_library import library_revision, load_library
 
 ACCELERATOR = os.path.join(
     os.path.dirname(stream.__file__),
@@ -30,8 +29,6 @@ ACCELERATOR = os.path.join(
 BACKEND = os.environ.get("STREAM_BACKEND", "ortools_gscip")
 OUTPUT_ROOT = "outputs"
 ESTIMATE = "estimate.json"
-# Reports what every tile DMA, the shim's measured bandwidth and each link carry per iteration;
-# with neither bound set it adds no constraint, so the design stream returns is unchanged.
 PORT_REPORT = {"memory_ports": {"interval": False, "burst": False}}
 
 
@@ -60,7 +57,7 @@ def solve_options(npu: str, kernel_library=None):
     lock stall, not route queueing), tile sizes searched around the mapping's seed, and port
     activity reported."""
     from stream.api import SolveOptions
-    from stream.opt.solver.solver import ConstraintSelection
+    from stream.opt.solver import ConstraintSelection
 
     return SolveOptions(
         backend=BACKEND,
@@ -68,7 +65,7 @@ def solve_options(npu: str, kernel_library=None):
         constraint_selection=ConstraintSelection(
             transfer_contention=False, offchip_contention=False
         ),
-        kernel_library=kernel_library or library(),
+        kernel_library=kernel_library or load_library(),
         tile_search=True,
         families=[PORT_REPORT],
         stage_options={

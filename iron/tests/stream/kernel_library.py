@@ -15,10 +15,9 @@ pytest.importorskip(
 from stream.compiler.kernels.registry import AIE_KERNELS  # noqa: E402
 
 from iron.common import AIEContext  # noqa: E402
-from iron.common.stream.kernel_library import fixed_dims, library  # noqa: E402
+from iron.common.stream.kernel_library import fixed_dims, load_library  # noqa: E402
 from iron.common.stream.ops import TORCH_OPS, artifacts_for_object  # noqa: E402
-
-FLASH_BLOCK = 64
+from iron.operators.mha_prefill_stream.stream_design import FLASH_BLOCK  # noqa: E402
 
 
 @pytest.mark.parametrize("op", TORCH_OPS.values(), ids=lambda op: op.onnx_type)
@@ -29,7 +28,7 @@ def test_every_torch_op_names_a_stream_kernel(op):
 def _library_objects():
     """Every object the library names, at each shape it carries cycles for."""
     names = set()
-    for spec in library("aie2p").kernels.values():
+    for spec in load_library("aie2p").kernels.values():
         if spec.object is not None:
             shapes = [shape for shape, _ in spec.cycles] or [{}]
             names.update(spec.object.format(**shape) for shape in shapes)
@@ -45,7 +44,6 @@ def test_every_object_the_library_names_has_a_build_rule(name):
     assert name in objects
 
 
-# The shapes each source compiles for: mm.cc's divisors, mha.cc's query blocks.
 DECLARED_BLOCKS = [
     (
         "matmul_bf16_bf16",
@@ -64,7 +62,7 @@ DECLARED_BLOCKS = [
 
 @pytest.mark.parametrize("symbol, shape, expected", DECLARED_BLOCKS)
 def test_the_library_declares_the_blocks_the_sources_compile(symbol, shape, expected):
-    spec = library("aie2p").spec(symbol)
+    spec = load_library("aie2p").spec(symbol)
     for position, sizes in expected.items():
         dim = spec.dim(("m", "k", "n")[position])
         if dim.divisor:
@@ -79,7 +77,7 @@ def test_the_library_declares_the_blocks_the_sources_compile(symbol, shape, expe
 
 def test_every_library_entry_names_a_source_that_exists():
     root = AIEContext().kernels_dir
-    for symbol, spec in library("aie2p").kernels.items():
+    for symbol, spec in load_library("aie2p").kernels.items():
         assert (
             root / spec.source
         ).exists(), f"{symbol} names a source that is not there"

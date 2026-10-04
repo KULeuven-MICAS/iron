@@ -21,7 +21,6 @@ aie_utils.set_current_device(NPU2())
 from iron.operators.mha_prefill_stream import stream_design as mha  # noqa: E402
 from iron.operators.swiglu_prefill_stream import stream_design as swiglu  # noqa: E402
 
-# Stream-backed operators as (design module, dimensions, group counts built).
 DESIGNS = {
     "swiglu": (swiglu, (256, 512, 2048), (1, 2, 5)),
     "mha": (mha, (256, 64), (mha.LAYER_BY_LAYER,)),
@@ -68,9 +67,7 @@ def test_group_names_the_kernels_of_its_layers(design, dims, k, index, tmp_path)
 def test_a_flash_mapping_seeds_at_the_finest_block_the_kernels_compile_for():
     """The query block is stream-dse's to choose, so IRON only says where the search
     starts, and it starts fine because placement is generated from the seed."""
-    from iron.common.stream.kernel_library import flash_blocks
-
     seed = mha.flash_query_seed()
-    assert seed == min(flash_blocks())
+    assert seed == min(mha.flash_blocks())
     assert mha.query_tile(256, 1, flash=True) == seed
     assert mha.kernel_tiles(256, 64, 1, flash=True)[mha.SCORES_NODE][0] == seed

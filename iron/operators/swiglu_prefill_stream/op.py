@@ -32,7 +32,7 @@ class _SwiGLUStreamGroup(StreamGroup):
         StreamGroup.__init__(self, context=self.context)
 
     @property
-    def _design(self):
+    def _design_module(self):
         from iron.operators.swiglu_prefill_stream import stream_design
 
         return stream_design
@@ -50,8 +50,8 @@ class _SwiGLUStreamGroup(StreamGroup):
     def _ports(self):
         dims = (self.seq_len, self.embedding_dim, self.hidden_dim)
         return (
-            self._design.workload_for(*dims).shapes,
-            self._design.group_ports(
+            self._design_module.workload_for(*dims).shapes,
+            self._design_module.group_ports(
                 *dims, self.k, self._dims()["npu"], self.gemm_block
             )[self.group_index],
         )
@@ -96,7 +96,7 @@ class SwiGLUPrefillStream(OperatorSequence):
         share_designs=True,
         gemm_block=None,
     ):
-        from iron.common.stream.design import trace_size
+        from iron.common.stream.design import sequence_dispatch, trace_size
 
         ports, inputs, outputs = _wiring(
             seq_len, embedding_dim, hidden_dim, k, gemm_block
@@ -126,5 +126,6 @@ class SwiGLUPrefillStream(OperatorSequence):
             output_args=outputs,
             trace_size=trace_size(),
             share_designs=share_designs,
+            dispatch=sequence_dispatch(len(groups)),
             context=context,
         )

@@ -20,4 +20,4 @@
 # the working directory must be writable.
 
 onnxscript>=0.7
-stream-dse>=1.15.0
+stream-dse>=1.15.1

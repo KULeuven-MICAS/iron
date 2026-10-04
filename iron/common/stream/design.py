@@ -10,20 +10,22 @@ import re
 from functools import lru_cache
 from pathlib import Path
 
+import aie.utils as aie_utils
+from aie.iron.device import NPU2
+
 __all__ = [
-    "prefixed",
+    "with_func_prefix",
     "stream_revision",
     "region_module",
     "design_paths",
     "group_text",
-    "digest",
+    "design_digest",
     "trace_size",
     "trace_tiles",
     "traced_tiles",
     "traced_ports",
 ]
 
-# A memory tile's trace packet type, and the event slots one trace unit has.
 _MEMTILE_PACKET = 3
 _EVENT_SLOTS = 8
 
@@ -43,7 +45,7 @@ def stream_revision() -> str:
     return hashlib.sha256(f"{stream.__version__}{stamps}".encode()).hexdigest()[:8]
 
 
-def prefixed(mlir_text: str, func_prefix: str) -> str:
+def with_func_prefix(mlir_text: str, func_prefix: str) -> str:
     """Apply ``OperatorSequence``'s ``func_prefix`` (``op<idx>_``) to a group's kernel
     object files and symbols. Longest symbol first, so one cannot prefix another."""
     if not func_prefix:
@@ -72,7 +74,7 @@ def region_module(mlir_text: str, func_prefix: str = ""):
     from aie.extras.context import mlir_mod_ctx
 
     with mlir_mod_ctx():
-        return ir.Module.parse(prefixed(mlir_text, func_prefix))
+        return ir.Module.parse(with_func_prefix(mlir_text, func_prefix))
 
 
 def design_paths(output_dir: str, n_groups: int) -> list[str]:
@@ -134,9 +136,18 @@ def _watch_dma_ports(mlir_text: str, ports) -> str:
         return str(module)
 
 
-def digest(mlir_text: str) -> str:
+def design_digest(mlir_text: str) -> str:
     """Digest of a group's design, for recognising groups that share one."""
     return hashlib.sha256(mlir_text.encode()).hexdigest()
+
+
+def sequence_dispatch(designs: int) -> str:
+    """``single_xclbin`` for one untraced design on NPU2, configured once at context
+    creation rather than on every dispatch; ``auto`` otherwise."""
+    single = designs == 1 and not trace_size()
+    if single and isinstance(aie_utils.get_current_device(), NPU2):
+        return "single_xclbin"
+    return "auto"
 
 
 def trace_size() -> int:
