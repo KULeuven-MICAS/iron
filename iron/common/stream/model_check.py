@@ -58,7 +58,6 @@ def build(operator, point, candidate, build_dir):
     context = AIEContext(build_dir=str(build_dir))
     if operator == DISPATCH_FLOOR["operator"]:
         from iron.common.sequence import OperatorSequence
-        from iron.common.stream.design import sequence_dispatch
         from iron.common.stream.hardware import array
         from iron.operators.relu.op import ReLU
 
@@ -75,7 +74,6 @@ def build(operator, point, candidate, build_dir):
             runlist=[(relu, "x", "y")],
             input_args=["x"],
             output_args=["y"],
-            dispatch=sequence_dispatch(1),
             context=context,
         )
     operator_class = getattr(_operator_module(operator, "op"), OPERATORS[operator][1])

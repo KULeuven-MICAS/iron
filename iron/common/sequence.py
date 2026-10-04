@@ -190,28 +190,6 @@ class FusedDispatch(SequenceDispatch):
         return SequenceFullELFCallable(seq)
 
 
-class SingleXclbinDispatch(SequenceDispatch):
-    """One untraced step without scratchpad parameters dispatched as its own xclbin
-    (NPU2), which configures the array once, at context creation."""
-
-    name = "single_xclbin"
-
-    def resolve(self, device):
-        if not isinstance(device, NPU2):
-            raise RuntimeError("dispatch='single_xclbin' requires NPU2")
-        return self
-
-    def set_up_artifacts(self, seq):
-        if len(seq.runlist) != 1 or seq.trace_size:
-            raise ValueError("dispatch='single_xclbin' takes one untraced step")
-        op, *self.entry_names = seq.runlist[0]
-        self.xclbin, self.insts = op.get_artifacts(prefix=f"{seq.name}_")
-        seq.add_artifacts([self.xclbin, self.insts])
-
-    def make_callable(self, seq):
-        return SequenceSingleXclbinCallable(seq, self)
-
-
 class SeparateDispatch(SequenceDispatch):
     """Chained-xclbin dispatch: one xclbin+insts per unique operator, linked
     via ``--xclbin-input`` and invoked sequentially. Owns the compiled
@@ -315,7 +293,6 @@ class ReferenceDispatch(SequenceDispatch):
 _DISPATCH_ALIASES = {
     "auto": AutoDispatch,
     "fused": FusedDispatch,
-    "single_xclbin": SingleXclbinDispatch,
     "separate": SeparateDispatch,
     "compare": CompareDispatch,
     "reference": ReferenceDispatch,
@@ -336,8 +313,7 @@ class OperatorSequence(AIEOperatorBase):
             :class:`SequenceDispatch` instance. Recognised names:
             ``"auto"`` (default) selects ``"fused"`` on NPU2 and
             ``"separate"`` on NPU1.  ``"fused"`` uses a single-ELF
-            dispatch (requires NPU2).  ``"single_xclbin"`` dispatches one
-            step without scratchpad parameters as its own xclbin (NPU2).  ``"separate"`` compiles each
+            dispatch (requires NPU2).  ``"separate"`` compiles each
             sub-operator to its own xclbin and invokes them sequentially.
             ``"reference"`` runs only the per-operator CPU reference
             implementations (no NPU compilation/dispatch).  ``"compare"``
@@ -895,25 +871,6 @@ class SequenceReferenceCallable(_PerBufferCallable):
             out_flat = self._resolve_buffer(out_name).torch_view()
             n_out = int(np.prod(out_spec.shape)) if out_spec.shape else 1
             out_flat[:n_out].copy_(out.reshape(-1).to(torch.bfloat16))
-
-
-class SequenceSingleXclbinCallable(SequenceXclbinCallable):
-    """A runlist of one step: one xclbin, one dispatch per call. The compiled
-    artifacts live on the ``SingleXclbinDispatch`` passed in as ``dispatch``."""
-
-    def _allocate_buffers(self):
-        _PerBufferCallable._allocate_buffers(self)
-        self.kernel_handle = aie_utils.DefaultNPURuntime.load(
-            NPUKernel(
-                xclbin_path=self._dispatch.xclbin.filename,
-                kernel_name=self._dispatch.xclbin.kernel_name,
-                insts_path=self._dispatch.insts.filename,
-            )
-        )
-        self._args = [self._resolve_buffer(name) for name in self._dispatch.entry_names]
-
-    def _run(self):
-        aie_utils.DefaultNPURuntime.run(self.kernel_handle, self._args)
 
 
 class SequenceCompareCallable(SequenceXclbinCallable):

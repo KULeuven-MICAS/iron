@@ -96,7 +96,7 @@ class SwiGLUPrefillStream(OperatorSequence):
         share_designs=True,
         gemm_block=None,
     ):
-        from iron.common.stream.design import sequence_dispatch, trace_size
+        from iron.common.stream.design import trace_size
 
         ports, inputs, outputs = _wiring(
             seq_len, embedding_dim, hidden_dim, k, gemm_block
@@ -126,6 +126,5 @@ class SwiGLUPrefillStream(OperatorSequence):
             output_args=outputs,
             trace_size=trace_size(),
             share_designs=share_designs,
-            dispatch=sequence_dispatch(len(groups)),
             context=context,
         )

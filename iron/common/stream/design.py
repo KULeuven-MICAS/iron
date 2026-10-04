@@ -10,9 +10,6 @@ import re
 from functools import lru_cache
 from pathlib import Path
 
-import aie.utils as aie_utils
-from aie.iron.device import NPU2
-
 __all__ = [
     "with_func_prefix",
     "stream_revision",
@@ -139,15 +136,6 @@ def _watch_dma_ports(mlir_text: str, ports) -> str:
 def design_digest(mlir_text: str) -> str:
     """Digest of a group's design, for recognising groups that share one."""
     return hashlib.sha256(mlir_text.encode()).hexdigest()
-
-
-def sequence_dispatch(designs: int) -> str:
-    """``single_xclbin`` for one untraced design on NPU2, configured once at context
-    creation rather than on every dispatch; ``auto`` otherwise."""
-    single = designs == 1 and not trace_size()
-    if single and isinstance(aie_utils.get_current_device(), NPU2):
-        return "single_xclbin"
-    return "auto"
 
 
 def trace_size() -> int:

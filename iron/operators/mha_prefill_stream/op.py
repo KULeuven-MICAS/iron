@@ -88,10 +88,10 @@ class MHAPrefillStream(OperatorSequence):
         flash=False,
         context=None,
         share_designs=True,
-        dispatch=None,
+        dispatch="auto",
         query_block=None,
     ):
-        from iron.common.stream.design import sequence_dispatch, trace_size
+        from iron.common.stream.design import trace_size
         from iron.operators.mha_prefill_stream.stream_design import (
             LAYER_BY_LAYER,
             group_ports,
@@ -134,6 +134,6 @@ class MHAPrefillStream(OperatorSequence):
             output_args=["output"],
             trace_size=trace_size(),
             share_designs=share_designs,
-            dispatch=dispatch or sequence_dispatch(len(runlist)),
+            dispatch=dispatch,
             context=context,
         )
