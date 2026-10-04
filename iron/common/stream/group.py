@@ -13,8 +13,8 @@ from iron.common import (
     MLIROperator,
     PythonGeneratedMLIRArtifact,
 )
-from iron.common.device_utils import get_kernel_dir
-from iron.common.stream.ops import artifacts_for_object, linked_objects
+from iron.common.compilation import KernelObjectArtifact
+from iron.common.stream.design import group_dir
 
 
 class StreamGroup(MLIROperator):
@@ -44,24 +44,13 @@ class StreamGroup(MLIROperator):
         )
 
     def get_kernel_artifacts(self):
-        """The objects this group's generated design links, built at the shapes it names;
-        stream-dse chooses the tile and names the object, and IRON builds that."""
-        kernels_dir, kernel_dir = self.context.kernels_dir, get_kernel_dir()
-        text = str(self._design_module.load_group(self.group_index, **self._dims()))
-        produced: dict[str, object] = {}
-        deferred: list[str] = []
-        for name in linked_objects(text):
-            try:
-                artifacts = artifacts_for_object(name, kernels_dir, kernel_dir)
-            except ValueError:
-                deferred.append(name)
-                continue
-            for artifact in artifacts:
-                produced.setdefault(Path(artifact.filename).name, artifact)
-        missing = [name for name in deferred if name not in produced]
-        if missing:
-            raise ValueError(f"no rule builds the kernel objects {missing}")
-        return list(produced.values())
+        """The objects this group's generated design links, built from the bindings
+        stream recorded for its calls."""
+        from stream.compiler.kernels.binding import load_bindings
+
+        self._design_module.load_group(self.group_index, **self._dims())
+        path = Path(group_dir(self.design_root(), self.group_index), "kernels.json")
+        return [KernelObjectArtifact.from_extern(b) for b in load_bindings(path)]
 
     def design_root(self) -> Path:
         """The directory stream wrote this group's design to, with its ``estimate.json``."""

@@ -286,6 +286,6 @@ def group_digest(group_index, **dims) -> str:
     return design_digest(_group_text(group_index, **dims))
 
 
-def load_group(group_index, func_prefix="", **dims):
+def load_group(group_index, **dims):
     """Generate the ``k``-group design once and return one group's aie module."""
-    return region_module(_group_text(group_index, **dims), func_prefix)
+    return region_module(_group_text(group_index, **dims))

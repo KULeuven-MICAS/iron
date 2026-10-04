@@ -300,7 +300,6 @@ def group_digest(group_index, **dims) -> str:
     return design_digest(_group_text(group_index, **dims))
 
 
-def load_group(group_index, func_prefix="", **dims):
-    """Generate the ``k``-group design once and return group ``group_index``'s aie module;
-    ``func_prefix`` is injected by ``OperatorSequence``."""
-    return region_module(_group_text(group_index, **dims), func_prefix)
+def load_group(group_index, **dims):
+    """Generate the ``k``-group design once and return group ``group_index``'s aie module."""
+    return region_module(_group_text(group_index, **dims))

@@ -11,9 +11,9 @@ from functools import lru_cache
 from pathlib import Path
 
 __all__ = [
-    "with_func_prefix",
     "stream_revision",
     "region_module",
+    "group_dir",
     "design_paths",
     "group_text",
     "design_digest",
@@ -42,42 +42,25 @@ def stream_revision() -> str:
     return hashlib.sha256(f"{stream.__version__}{stamps}".encode()).hexdigest()[:8]
 
 
-def with_func_prefix(mlir_text: str, func_prefix: str) -> str:
-    """Apply ``OperatorSequence``'s ``func_prefix`` (``op<idx>_``) to a group's kernel
-    object files and symbols. Longest symbol first, so one cannot prefix another."""
-    if not func_prefix:
-        return mlir_text
-    mlir_text = re.sub(
-        r'link_with\s*=\s*"([^"]+)"',
-        lambda match: f'link_with = "{func_prefix}{match.group(1)}"',
-        mlir_text,
-    )
-    symbols = sorted(
-        set(re.findall(r"func\.func\s+private\s+@([A-Za-z0-9_]+)", mlir_text)),
-        key=len,
-        reverse=True,
-    )
-    for symbol in symbols:
-        mlir_text = re.sub(
-            rf"@{re.escape(symbol)}\b", f"@{func_prefix}{symbol}", mlir_text
-        )
-    return mlir_text
-
-
-def region_module(mlir_text: str, func_prefix: str = ""):
-    """Parse a group's xDSL-emitted MLIR, after ``func_prefix`` rewriting, into an
-    ``aie`` module, since ``OperatorSequence`` consumes ``aie.DeviceOp`` objects."""
+def region_module(mlir_text: str):
+    """Parse a group's xDSL-emitted MLIR into an ``aie`` module, since
+    ``OperatorSequence`` consumes ``aie.DeviceOp`` objects."""
     from aie import ir
     from aie.extras.context import mlir_mod_ctx
 
     with mlir_mod_ctx():
-        return ir.Module.parse(with_func_prefix(mlir_text, func_prefix))
+        return ir.Module.parse(mlir_text)
+
+
+def group_dir(output_dir: str, index: int) -> str:
+    """Where stream-dse writes one fused group's design and its ``kernels.json``."""
+    return os.path.join(output_dir, f"group_{index}", "codegen")
 
 
 def design_paths(output_dir: str, n_groups: int) -> list[str]:
     """Where stream-dse writes each fused group's MLIR."""
     return [
-        os.path.join(output_dir, f"group_{index}", "codegen", "final.mlir")
+        os.path.join(group_dir(output_dir, index), "final.mlir")
         for index in range(n_groups)
     ]
 

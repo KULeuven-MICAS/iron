@@ -7,17 +7,13 @@ emits them as one node; ``kernels/<dir>.toml`` describes each kernel."""
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Callable
 
 import torch
 from onnx import defs
 from onnxscript import opset18
 from onnxscript.values import Op, Opset
-
-from iron.common.stream.kernel_library import fixed_dims, load_library
 
 CUSTOM_DOMAIN = Opset("com.example", 1)
 
@@ -35,150 +31,6 @@ def custom_op(name: str) -> Op:
         type_constraints=[("T", _ELEMENT_TYPES, "")],
     )
     return Op(CUSTOM_DOMAIN, name, schema)
-
-
-_INTRINSICS = {"aie2p": "aie2pintrin.h"}
-
-
-def _mha_artifacts(name, kernels_dir, kernel_dir, m: int):
-    """``mha.cc`` with zero.cc, linked by both cores of an online-softmax step, plus the
-    copy that snapshots the running scale. Specialized and named on the query block ``m``,
-    which matmul_PV's accumulation is compiled for; the key block and head are fixed."""
-    from iron.common.compilation import KernelObjectArtifact, SourceArtifact
-
-    fixed = fixed_dims("matmul_PV", kernel_dir)
-    zero_source = kernels_dir / "zero" / "zero.cc"
-    return [
-        KernelObjectArtifact(
-            "mha_passThrough.o",
-            dependencies=[SourceArtifact(kernels_dir / "eltwise" / "passThrough.cc")],
-            extra_flags=["-DBIT_WIDTH=16"],
-        ),
-        KernelObjectArtifact(
-            name,
-            dependencies=[
-                SourceArtifact(kernels_dir / "linalg" / "mha.cc"),
-                SourceArtifact(zero_source),
-            ],
-            extra_flags=[
-                "-Dbf16_bf16_ONLY",
-                f"-DDIM_M={m}",
-                f"-DDIM_K={fixed['k']}",
-                f"-DDIM_N={fixed['n']}",
-                "-DROUND_CONV_EVEN",
-                "-DAIE_API_EMULATE_BFLOAT16_MMUL_WITH_BFP16",
-                "-DB_COL_MAJ",
-                "-DZERO_TYPE=bfloat16",
-                f"-DTILE_SIZE={m * fixed['n']}",
-                f"-include{_INTRINSICS[kernel_dir]}",
-                f"-include{zero_source}",
-            ],
-            rename_symbols={"zero": "zero_bf16"},
-        ),
-    ]
-
-
-def _gemm_artifacts(name, kernels_dir, kernel_dir, m: int, k: int, n: int):
-    """``mm.cc`` for one tile shape, with zero.cc compiled into the same object since a
-    core links one object. Symbols are renamed to stream-dse's dimension-suffixed ones, so
-    GEMMs of different tile shapes coexist in one design."""
-    from iron.common.compilation import KernelObjectArtifact, SourceArtifact
-
-    suffix = f"{m}_{k}_{n}"
-    zero_source = kernels_dir / "zero" / "zero.cc"
-    return [
-        KernelObjectArtifact(
-            name,
-            dependencies=[
-                SourceArtifact(kernels_dir / "linalg" / "mm.cc"),
-                SourceArtifact(zero_source),
-            ],
-            extra_flags=[
-                f"-DDIM_M={m}",
-                f"-DDIM_K={k}",
-                f"-DDIM_N={n}",
-                "-Dbf16_bf16_ONLY",
-                # Emulating the matmul on the bfp16 MACs is what makes the 8-row
-                # MAC tile available, so it and the layouts move together.
-                "-DAIE_API_EMULATE_BFLOAT16_MMUL_WITH_BFP16",
-                "-DROUND_CONV_EVEN",
-                # zero.cc's entry point, over the m x n output tile.
-                "-DZERO_TYPE=bfloat16",
-                f"-DTILE_SIZE={m * n}",
-                f"-include{_INTRINSICS[kernel_dir]}",
-                f"-include{zero_source}",
-            ],
-            rename_symbols={
-                "matmul_bf16_bf16": f"matmul_bf16_bf16_{suffix}",
-                "zero": f"zero_bf16_{suffix}",
-            },
-        )
-    ]
-
-
-def _sized(factory):
-    """An elementwise object compiled for the elements one call takes, as its mlir-aie
-    factory compiles it: with the count known at compile time the loop pipelines, where
-    a count only known at run time leaves the call twice as long."""
-
-    def build(name, kernels_dir, kernel_dir, m: int, n: int):
-        from iron.common.compilation import KernelObjectArtifact, SourceArtifact
-
-        fn = factory(m * n)
-        return [
-            KernelObjectArtifact(
-                name,
-                dependencies=[SourceArtifact(Path(fn.source_file))],
-                extra_flags=[*fn.compile_flags, *(f"-I{d}" for d in fn.include_dirs)],
-            )
-        ]
-
-    return build
-
-
-def _silu(elements):
-    from aie.iron.kernels import activation
-
-    return activation.silu_sized(elements)
-
-
-def _mul(elements):
-    from aie.iron.kernels import eltwise
-
-    return eltwise.mul_sized(elements)
-
-
-_BUILDERS = {
-    "mm.cc": _gemm_artifacts,
-    "mha.cc": _mha_artifacts,
-    "silu.cc": _sized(_silu),
-    "mul.cc": _sized(_mul),
-}
-
-
-def linked_objects(mlir_text: str) -> list[str]:
-    """The kernel objects a generated design links, in first-seen order."""
-    return list(dict.fromkeys(re.findall(r'link_with\s*=\s*"([^"]+)"', mlir_text)))
-
-
-def _object_shape(template: str, name: str) -> dict[str, int] | None:
-    pattern = re.sub(r"\\\{(\w+)\\\}", r"(?P<\1>\\d+)", re.escape(template))
-    match = re.fullmatch(pattern, name)
-    return {k: int(v) for k, v in match.groupdict().items()} if match else None
-
-
-def artifacts_for_object(name: str, kernels_dir, kernel_dir) -> list:
-    """The compilation artifacts building one linked object, found by the kernel library's object names."""
-    from iron.common.compilation import KernelObjectArtifact, SourceArtifact
-
-    for spec in load_library(kernel_dir).kernels.values():
-        if spec.object is None or (shape := _object_shape(spec.object, name)) is None:
-            continue
-        if build := _BUILDERS.get(Path(spec.source).name):
-            return build(name, kernels_dir, kernel_dir, **shape)
-        source = SourceArtifact(kernels_dir / spec.source)
-        return [KernelObjectArtifact(name, dependencies=[source])]
-    raise ValueError(f"no rule builds the kernel object {name!r}")
 
 
 Silu = custom_op("Silu")
