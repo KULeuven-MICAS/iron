@@ -338,7 +338,7 @@ def _port_rows(traced):
                         for r in view["port_activity"]
                         if r["kind"] == "memory_port"
                         and r["core_ids"] == [core]
-                        and r["port"] == f"dma.{direction.lower()}"
+                        and r["resource"] == f"dma.{direction.lower()}"
                     )
                     cycles = sum(
                         activity["busy"].get(f"PORT_RUNNING_{i}", 0)

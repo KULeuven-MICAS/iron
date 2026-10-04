@@ -15,7 +15,12 @@ from iron.common.stream.runner import (
     write_estimate,
 )
 
-ROW = {"kind": "memory_port", "port": "dma.s2mm", "core_ids": [2], "utilization": 0.9}
+ROW = {
+    "kind": "memory_port",
+    "resource": "dma.s2mm",
+    "core_ids": [2],
+    "utilization": 0.9,
+}
 LATENCY = {"total": 100, "per_iteration": 40, "overlap_between_iterations": 20}
 
 

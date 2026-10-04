@@ -40,7 +40,7 @@ def test_a_design_two_groups_share_is_traced_over_both_runs():
     row = {
         "kind": "memory_port",
         "core_ids": [MEMTILE],
-        "port": "dma.s2mm",
+        "resource": "dma.s2mm",
         "bits_per_iteration": 640,
     }
     latency = LATENCY | {"total": 1000 + 77, "fill": 77}
