@@ -49,4 +49,8 @@ def test_every_solve_asks_for_the_port_report(monkeypatch):
 
     monkeypatch.setattr(runner, "array", lambda: SimpleNamespace(num_columns=8))
     monkeypatch.setattr(runner, "load_library", lambda: None)
-    assert solve_options("npu2").families == [PORT_REPORT]
+    families = solve_options("npu2").families
+    assert families[-1] == PORT_REPORT
+    assert {
+        "overlap": {"transfer_contention": False, "offchip_contention": False}
+    } in families

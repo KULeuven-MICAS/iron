@@ -56,18 +56,15 @@ def solve_options(npu: str, kernel_library=None):
     """How every solve runs: no link or off-chip contention (traced core idle time here is
     lock stall, not route queueing), tile sizes searched around the mapping's seed, and port
     activity reported."""
-    from stream.api import SolveOptions
-    from stream.opt.solver import ConstraintSelection
+    from stream.api import SolveOptions, default_families
 
+    overlap = {"overlap": {"transfer_contention": False, "offchip_contention": False}}
     return SolveOptions(
         backend=BACKEND,
         nb_cols_to_use=array().num_columns,
-        constraint_selection=ConstraintSelection(
-            transfer_contention=False, offchip_contention=False
-        ),
         kernel_library=kernel_library or load_library(),
         tile_search=True,
-        families=[PORT_REPORT],
+        families=[*default_families(ACCELERATOR, options=overlap), PORT_REPORT],
         stage_options={
             "npu": npu,
             "trace_size": trace_size(),
