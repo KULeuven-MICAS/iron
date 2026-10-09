@@ -59,12 +59,17 @@ def solve_options(npu: str, kernel_library=None):
     from stream.api import SolveOptions, default_families
 
     overlap = {"overlap": {"transfer_contention": False, "offchip_contention": False}}
+    families = list(default_families(ACCELERATOR, options=overlap))
+    if "memory_ports" in families:
+        families[families.index("memory_ports")] = PORT_REPORT
+    else:
+        families.append(PORT_REPORT)
     return SolveOptions(
         backend=BACKEND,
         nb_cols_to_use=array().num_columns,
         kernel_library=kernel_library or load_library(),
         tile_search=True,
-        families=[*default_families(ACCELERATOR, options=overlap), PORT_REPORT],
+        families=families,
         stage_options={
             "npu": npu,
             "trace_size": trace_size(),
