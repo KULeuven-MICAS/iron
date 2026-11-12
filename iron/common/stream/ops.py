@@ -94,6 +94,7 @@ class StreamOp:
 
 TORCH_OPS: dict[Callable, StreamOp] = {
     torch.ops.aten.matmul.default: StreamOp("MatMul", "gemm"),
+    torch.ops.aten.linear.default: StreamOp("Gemm", "gemm"),
     torch.ops.aten.silu.default: StreamOp("Silu", "silu", _to_silu),
     torch.ops.aten.mul.Tensor: StreamOp("Mul", "eltwise_mul", _to_mul),
     torch.ops.aten.softmax.int: StreamOp("Softmax", "softmax", _to_softmax),

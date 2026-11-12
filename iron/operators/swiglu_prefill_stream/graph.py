@@ -19,9 +19,9 @@ from .op import (
 
 
 class SwiGLUPrefillStream(iron.Graph):
-    """``(SiLU(x @ w_gate) * (x @ w_up)) @ w_down``, as stream-dse partitions it.
+    """``(SiLU(x @ w_gate.T) * (x @ w_up.T)) @ w_down.T``, as stream-dse partitions it.
 
-    Over the ``(in, out)`` weights it holds. stream-dse chooses the
+    Over the ``(out, in)`` weights it holds, as ``nn.Linear`` stores them. stream-dse chooses the
     partition and the GEMM block (``k`` and ``gemm_block`` narrow the
     choice, as ``_SwiGLUStream``'s): one fused group is one step; split per
     layer, each group is a step and the full ELF dispatches them in turn.
@@ -34,7 +34,7 @@ class SwiGLUPrefillStream(iron.Graph):
     def body(self, x):
         shape = dict(
             embedding_dim=x.shape[1],
-            hidden_dim=self.w_gate.shape[1],
+            hidden_dim=self.w_gate.shape[0],
             k=self.k,
             gemm_block=self.gemm_block,
         )

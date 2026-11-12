@@ -48,21 +48,25 @@ ELEMENTWISE_WIDTH = 2048
 
 
 class SwiGLU(nn.Module):
-    """``(SiLU(input @ w_gate) * (input @ w_up)) @ w_down`` over ``(seq_len, embedding_dim)``."""
+    """``(SiLU(input @ w_gate.T) * (input @ w_up.T)) @ w_down.T`` over ``(seq_len, embedding_dim)``.
+
+    The weights are ``(out, in)``, as ``nn.Linear`` holds them.
+    """
 
     def __init__(self, embedding_dim: int, hidden_dim: int):
         super().__init__()
-        gate_up = (embedding_dim, hidden_dim)
+        gate_up = (hidden_dim, embedding_dim)
         self.w_gate = nn.Parameter(torch.zeros(gate_up, dtype=torch.bfloat16))
         self.w_up = nn.Parameter(torch.zeros(gate_up, dtype=torch.bfloat16))
         self.w_down = nn.Parameter(
-            torch.zeros((hidden_dim, embedding_dim), dtype=torch.bfloat16)
+            torch.zeros((embedding_dim, hidden_dim), dtype=torch.bfloat16)
         )
 
     def forward(self, input):
-        gate = input @ self.w_gate
-        up = input @ self.w_up
-        return (torch.nn.functional.silu(gate) * up) @ self.w_down
+        linear = torch.nn.functional.linear
+        gate = linear(input, self.w_gate)
+        up = linear(input, self.w_up)
+        return linear(torch.nn.functional.silu(gate) * up, self.w_down)
 
 
 @cache
@@ -93,7 +97,7 @@ def mapping(k: int, block, hidden_dim: int) -> tuple[dict[str, dict], list[Fused
     sequence, embedding, hidden = block
 
     def gemm(m, k, n):
-        return dict(m=m, k=k, n=n, layout="default")
+        return dict(m=m, k=k, n=n, layout="default", b_col_maj=True)
 
     if len(PARTITIONS[k]) == len(LAYERS):
         elementwise = dict(layout="contiguous", m=1, n=_row_width(hidden_dim))

@@ -26,9 +26,9 @@ def _block(seq_len, embedding_dim, hidden_dim, seed=42):
 
     return (
         draw(seq_len, embedding_dim),
-        draw(embedding_dim, hidden_dim),
-        draw(embedding_dim, hidden_dim),
         draw(hidden_dim, embedding_dim),
+        draw(hidden_dim, embedding_dim),
+        draw(embedding_dim, hidden_dim),
     )
 
 

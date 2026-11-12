@@ -161,7 +161,7 @@ class _SwiGLUStream(StreamOperator):
 class SwiGLUFusedStream(_SwiGLUStream):
     """The whole SwiGLU prefill block as one fused group.
 
-    ``(SiLU(input @ w_gate) * (input @ w_up)) @ w_down``, every layer on
+    ``(SiLU(input @ w_gate.T) * (input @ w_up.T)) @ w_down.T``, every layer on
     the array at once and pipelined, its intermediates on chip.
     """
 
@@ -182,9 +182,9 @@ class SwiGLUFusedStream(_SwiGLUStream):
     )
 
     input = In(_SwiGLUStream.seq_len, _SwiGLUStream.embedding_dim, dtype=bfloat16)
-    w_gate = In(_SwiGLUStream.embedding_dim, _SwiGLUStream.hidden_dim, dtype=bfloat16)
-    w_up = In(_SwiGLUStream.embedding_dim, _SwiGLUStream.hidden_dim, dtype=bfloat16)
-    w_down = In(_SwiGLUStream.hidden_dim, _SwiGLUStream.embedding_dim, dtype=bfloat16)
+    w_gate = In(_SwiGLUStream.hidden_dim, _SwiGLUStream.embedding_dim, dtype=bfloat16)
+    w_up = In(_SwiGLUStream.hidden_dim, _SwiGLUStream.embedding_dim, dtype=bfloat16)
+    w_down = In(_SwiGLUStream.embedding_dim, _SwiGLUStream.hidden_dim, dtype=bfloat16)
     output = Out(_SwiGLUStream.seq_len, _SwiGLUStream.embedding_dim, dtype=bfloat16)
 
     def layers(self):
@@ -196,10 +196,10 @@ class SwiGLUFusedStream(_SwiGLUStream):
     def reference(self, input, w_gate, w_up, w_down):
         """Return the block in float32, each intermediate rounded to bf16 as the cores hold it."""
         x = np.asarray(input, dtype=np.float32)
-        gate = _bf16(x @ np.asarray(w_gate, dtype=np.float32))
-        up = _bf16(x @ np.asarray(w_up, dtype=np.float32))
+        gate = _bf16(x @ np.asarray(w_gate, dtype=np.float32).T)
+        up = _bf16(x @ np.asarray(w_up, dtype=np.float32).T)
         hidden = _mul(_silu(gate), up)
-        return hidden @ np.asarray(w_down, dtype=np.float32)
+        return hidden @ np.asarray(w_down, dtype=np.float32).T
 
     def tolerance(self) -> Tolerance:
         return GEMM_TOLERANCE
@@ -208,13 +208,13 @@ class SwiGLUFusedStream(_SwiGLUStream):
 class SwiGLUGatedStream(_SwiGLUStream):
     """The gate and up projections and their gated product as one fused group.
 
-    ``SiLU(x @ w_gate) * (x @ w_up)`` over ``(seq_len, hidden_dim)``, the
+    ``SiLU(x @ w_gate.T) * (x @ w_up.T)`` over ``(seq_len, hidden_dim)``, the
     SiLU and the product run as post-ops on the GEMMs' cores.
     """
 
     x = In(_SwiGLUStream.seq_len, _SwiGLUStream.embedding_dim, dtype=bfloat16)
-    w_gate = In(_SwiGLUStream.embedding_dim, _SwiGLUStream.hidden_dim, dtype=bfloat16)
-    w_up = In(_SwiGLUStream.embedding_dim, _SwiGLUStream.hidden_dim, dtype=bfloat16)
+    w_gate = In(_SwiGLUStream.hidden_dim, _SwiGLUStream.embedding_dim, dtype=bfloat16)
+    w_up = In(_SwiGLUStream.hidden_dim, _SwiGLUStream.embedding_dim, dtype=bfloat16)
     y = Out(_SwiGLUStream.seq_len, _SwiGLUStream.hidden_dim, dtype=bfloat16)
 
     def layers(self):
@@ -225,8 +225,8 @@ class SwiGLUGatedStream(_SwiGLUStream):
 
     def reference(self, x, w_gate, w_up):
         x = np.asarray(x, dtype=np.float32)
-        gate = _bf16(x @ np.asarray(w_gate, dtype=np.float32))
-        up = _bf16(x @ np.asarray(w_up, dtype=np.float32))
+        gate = _bf16(x @ np.asarray(w_gate, dtype=np.float32).T)
+        up = _bf16(x @ np.asarray(w_up, dtype=np.float32).T)
         return _mul(_silu(gate), up)
 
     def tolerance(self) -> Tolerance:
@@ -234,11 +234,12 @@ class SwiGLUGatedStream(_SwiGLUStream):
 
 
 class SwiGLUProjectionStream(_SwiGLUStream):
-    """One of the block's GEMMs as a fused group of its own, ``y = x @ w``.
+    """One of the block's GEMMs as a fused group of its own, ``y = x @ w.T``.
 
     ``layer`` names it: the gate or up projection, ``(seq_len,
-    embedding_dim) @ (embedding_dim, hidden_dim)``, or the down projection,
-    ``(seq_len, hidden_dim) @ (hidden_dim, embedding_dim)``.
+    embedding_dim)`` by a ``(hidden_dim, embedding_dim)`` weight, or the down
+    projection, ``(seq_len, hidden_dim)`` by an ``(embedding_dim, hidden_dim)``
+    weight.
     """
 
     layer: str = param()
@@ -252,7 +253,7 @@ class SwiGLUProjectionStream(_SwiGLUStream):
     )
 
     x = In(_SwiGLUStream.seq_len, K, dtype=bfloat16)
-    w = In(K, N, dtype=bfloat16)
+    w = In(N, K, dtype=bfloat16)
     y = Out(_SwiGLUStream.seq_len, N, dtype=bfloat16)
 
     def validate(self) -> None:
@@ -270,7 +271,7 @@ class SwiGLUProjectionStream(_SwiGLUStream):
         return 2 * self.seq_len * self.K * self.N
 
     def reference(self, x, w):
-        return np.asarray(x, dtype=np.float32) @ np.asarray(w, dtype=np.float32)
+        return np.asarray(x, dtype=np.float32) @ np.asarray(w, dtype=np.float32).T
 
     def tolerance(self) -> Tolerance:
         return GEMM_TOLERANCE
