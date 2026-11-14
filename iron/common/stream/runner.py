@@ -200,7 +200,7 @@ def solve(
             emit_mapping(workload, *c, inputs / f"candidate_{i}.yaml")
             for i, c in enumerate(candidates)
         ]
-        chosen = 0
+        chosen, best = 0, None
         if len(mappings) > 1:
             best = select_mapping(
                 accelerator(dev), workload_path, str(directory), mappings, options
@@ -208,7 +208,12 @@ def solve(
             chosen = mappings.index(best.mapping)
         logger.info("%s: building candidate %d of %d", name, chosen, len(mappings))
         estimate = generate_code(
-            accelerator(dev), workload_path, str(directory), mappings[chosen], options
+            accelerator(dev),
+            workload_path,
+            str(directory),
+            mappings[chosen],
+            options,
+            estimate=best,
         )
         _, groups = candidates[chosen]
         solution = Solution(

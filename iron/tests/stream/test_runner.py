@@ -60,7 +60,7 @@ def solver(monkeypatch, tmp_path):
         calls.select += 1
         return SimpleNamespace(mapping=candidates[-1])
 
-    def generate_code(hardware, workload, out, mapping, options):
+    def generate_code(hardware, workload, out, mapping, options, estimate=None):
         calls.generate += 1
         occupancy = [{"memory": "tile_0_2", "resident_bits": 8, "capacity_bits": 64}]
         allocation = {"performance": {"memory_occupancy": occupancy}}
